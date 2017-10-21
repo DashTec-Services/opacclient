@@ -33,17 +33,19 @@ import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Library;
 import de.geeksfactory.opacclient.objects.SearchRequestResult;
 import de.geeksfactory.opacclient.objects.SearchResult;
+import de.geeksfactory.opacclient.objects.Volume;
 import de.geeksfactory.opacclient.searchfields.DropdownSearchField;
 import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 import de.geeksfactory.opacclient.searchfields.TextSearchField;
 
-public class VuFind extends BaseApi {
+public class VuFind extends ApacheBaseApi {
+    protected static final Pattern idPattern = Pattern.compile("\\/(?:Opacrl)?Record\\/([^/]+)");
     protected static HashMap<String, String> languageCodes = new HashMap<>();
     protected static HashMap<String, SearchResult.MediaType> mediaTypeSelectors = new HashMap<>();
 
@@ -159,7 +161,8 @@ public class VuFind extends BaseApi {
         int rescount = -1;
         if (doc.select(".resulthead").size() == 1) {
             rescount = Integer.parseInt(
-                    doc.select(".resulthead strong").get(2).text());
+                    doc.select(".resulthead strong").get(2).text().replace(",", "")
+                       .replace(".", ""));
         }
         List<SearchResult> reslist = new ArrayList<>();
 
@@ -238,7 +241,15 @@ public class VuFind extends BaseApi {
             String href = row.select("a.title").first().absUrl("href");
             try {
                 URL idurl = new URL(href);
-                res.setId(idurl.getPath().replace("/Record/", ""));
+                String path = idurl.getPath();
+                Matcher matcher = idPattern.matcher(path);
+                if (matcher.find()) {
+                    if (matcher.group().contains("/OpacrlRecord/")) {
+                        res.setId("Opacrl:" + matcher.group(1));
+                    } else {
+                        res.setId(matcher.group(1));
+                    }
+                }
             } catch (MalformedURLException e) {
                 e.printStackTrace();
             }
@@ -267,27 +278,32 @@ public class VuFind extends BaseApi {
     }
 
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException, OpacErrorException {
         if (!initialised) start();
-        String url = opac_url + "/Record/" + id;
+        String url = getShareUrl(id, null);
         String html = httpGet(url, getDefaultEncoding());
         Document doc = Jsoup.parse(html);
         doc.setBaseUri(url);
-        return parse_detail(id, doc);
+        try {
+            return parseDetail(id, doc, data);
+        } catch (JSONException e) {
+            throw new RuntimeException(e);
+        }
     }
 
-    protected DetailledItem parse_detail(String id, Document doc) throws OpacErrorException {
+    static DetailedItem parseDetail(String id, Document doc, JSONObject data)
+            throws OpacErrorException, JSONException {
         if (doc.select("p.error, p.errorMsg, .alert-error").size() > 0) {
             throw new OpacErrorException(doc.select("p.error, p.errorMsg, .alert-error").text());
         }
 
-        DetailledItem res = new DetailledItem();
+        DetailedItem res = new DetailedItem();
         res.setId(id);
 
         Elements title = doc.select(".record h1, .record [itemprop=name], .record [property=name]");
         if (title.size() > 0) {
-            res.setTitle(title.text());
+            res.setTitle(title.first().text());
         }
         for (Element img : doc.select(".record img, #cover img")) {
             String src = img.absUrl("src");
@@ -298,19 +314,40 @@ public class VuFind extends BaseApi {
                 break;
             }
         }
+
+        String head = null;
+        StringBuilder value = new StringBuilder();
         for (Element tr : doc.select(".record table").first().select("tr")) {
-            String text = tr.child(1).text();
-            if (tr.child(1).select("a").size() > 0) {
-                String href = tr.child(1).select("a").attr("href");
-                if (!href.startsWith("/") || !text.contains(opac_url)) {
-                    text += " " + href;
+            if (tr.children().size() == 1) {
+                if (tr.child(0).tagName().equals("th")) {
+                    if (head != null) {
+                        res.addDetail(new Detail(head, value.toString()));
+                        value = new StringBuilder();
+                    }
+                    head = tr.child(0).text();
+                } else {
+                    if (!value.toString().equals("")) value.append("\n");
+                    value.append(tr.child(0).text());
                 }
+            } else {
+                String text = tr.child(1).text();
+                if (tr.child(1).select("a").size() > 0) {
+                    String href = tr.child(1).select("a").attr("href");
+                    if (!href.startsWith("/") && !text.contains(data.getString("baseurl"))) {
+                        text += " " + href;
+                    }
+                }
+                res.addDetail(new Detail(tr.child(0).text(), text));
             }
-            res.addDetail(new Detail(tr.child(0).text(), text));
         }
+        if (head != null) res.addDetail(new Detail(head, value.toString()));
 
         try {
-            parse_copies(res, doc);
+            if (doc.select("#Volumes").size() > 0) {
+                parseVolumes(res, doc, data);
+            } else {
+                parseCopies(res, doc, data);
+            }
         } catch (JSONException e) {
             e.printStackTrace();
         }
@@ -318,7 +355,21 @@ public class VuFind extends BaseApi {
         return res;
     }
 
-    protected void parse_copies(DetailledItem res, Document doc) throws JSONException {
+    private static void parseVolumes(DetailedItem res, Document doc, JSONObject data) {
+        // only tested in Münster
+        // e.g. https://www.stadt-muenster.de/opac2/Record/0900944
+        Element table = doc.select(".recordsubcontent, .tab-container").first()
+                           .select("table").first();
+        for (Element link : table.select("tr a")) {
+            Volume volume = new Volume();
+            Matcher matcher = idPattern.matcher(link.attr("href"));
+            if (matcher.find()) volume.setId(matcher.group(1));
+            volume.setTitle(link.text());
+            res.addVolume(volume);
+        }
+    }
+
+    static void parseCopies(DetailedItem res, Document doc, JSONObject data) throws JSONException {
         if ("doublestacked".equals(data.optString("copystyle"))) {
             // e.g. http://vopac.nlg.gr/Record/393668/Holdings#tabnav
             // for Athens_GreekNationalLibrary
@@ -349,7 +400,9 @@ public class VuFind extends BaseApi {
         } else if ("stackedtable".equals(data.optString("copystyle"))) {
             // e.g. http://search.lib.auth.gr/Record/376356
             // or https://katalog.ub.uni-leipzig.de/Record/0000196115
-            Element container = doc.select(".recordsubcontent").first();
+            // or https://www.stadt-muenster.de/opac2/Record/0367968
+            Element container = doc.select(".recordsubcontent, .tab-container").first();
+            // .tab-container is used in Muenster.
             String branch = "";
             JSONObject copytable = data.getJSONObject("copytable");
             for (Element child : container.children()) {
@@ -416,7 +469,7 @@ public class VuFind extends BaseApi {
     }
 
     @Override
-    public DetailledItem getResult(int position) throws IOException, OpacErrorException {
+    public DetailedItem getResult(int position) throws IOException, OpacErrorException {
         return null;
     }
 
@@ -429,7 +482,7 @@ public class VuFind extends BaseApi {
     }
 
     @Override
-    public List<SearchField> getSearchFields()
+    public List<SearchField> parseSearchFields()
             throws IOException, OpacErrorException, JSONException {
         start();
         String html = httpGet(opac_url + "/Search/Advanced?mylang = " + languageCode,
@@ -476,9 +529,11 @@ public class VuFind extends BaseApi {
             if (select.parent().select("label").size() > 0) {
                 field.setDisplayName(select.parent().select("label").first()
                                            .text());
+            } else if (select.parent().parent().select("label").size() == 1) {
+                field.setDisplayName(select.parent().parent().select("label").first()
+                                           .text());
             }
             field.setId(select.attr("name") + select.attr("id"));
-            List<Map<String, String>> dropdownOptions = new ArrayList<>();
             String meaning = select.attr("id");
             field.addDropdownValue("", "");
             for (Element option : select.select("option")) {
@@ -497,7 +552,12 @@ public class VuFind extends BaseApi {
 
     @Override
     public String getShareUrl(String id, String title) {
-        return opac_url + "/Record/" + id;
+        if (id.contains(":")) {
+            String[] parts = id.split(":");
+            return opac_url + "/" + parts[0] + "Record/" + parts[1];
+        } else {
+            return opac_url + "/Record/" + id;
+        }
     }
 
     @Override
@@ -538,7 +598,7 @@ public class VuFind extends BaseApi {
     }
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account account,
+    public ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException {
         return null;
     }

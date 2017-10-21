@@ -33,7 +33,7 @@ import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Filter.Option;
 import de.geeksfactory.opacclient.objects.LentItem;
@@ -49,6 +49,7 @@ import de.geeksfactory.opacclient.searchfields.SearchField.Meaning;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 import de.geeksfactory.opacclient.searchfields.TextSearchField;
 import de.geeksfactory.opacclient.utils.Base64;
+import okhttp3.FormBody;
 
 //@formatter:off
 
@@ -91,7 +92,7 @@ import de.geeksfactory.opacclient.utils.Base64;
  */
 //@formatter:on
 
-public class WinBiap extends BaseApi implements OpacApi {
+public class WinBiap extends OkHttpBaseApi implements OpacApi {
 
     protected static final String QUERY_TYPE_CONTAINS = "8";
     protected static final String QUERY_TYPE_FROM = "6";
@@ -104,11 +105,14 @@ public class WinBiap extends BaseApi implements OpacApi {
         defaulttypes.put("sb_buch", SearchResult.MediaType.BOOK);
         defaulttypes.put("sl_buch", SearchResult.MediaType.BOOK);
         defaulttypes.put("kj_buch", SearchResult.MediaType.BOOK);
+        defaulttypes.put("buch", SearchResult.MediaType.BOOK);
         defaulttypes.put("hoerbuch", SearchResult.MediaType.AUDIOBOOK);
         defaulttypes.put("musik", SearchResult.MediaType.CD_MUSIC);
         defaulttypes.put("cdrom", SearchResult.MediaType.CD_SOFTWARE);
         defaulttypes.put("dvd", SearchResult.MediaType.DVD);
         defaulttypes.put("online", SearchResult.MediaType.EBOOK);
+        defaulttypes.put("konsole", SearchResult.MediaType.GAME_CONSOLE);
+        defaulttypes.put("zschrift", SearchResult.MediaType.MAGAZINE);
     }
 
     protected String opac_url = "";
@@ -421,15 +425,15 @@ public class WinBiap extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException, OpacErrorException {
         String html = httpGet(opac_url + "/detail.aspx?Id=" + id, getDefaultEncoding(), false);
         return parse_result(html);
     }
 
-    private DetailledItem parse_result(String html) {
+    private DetailedItem parse_result(String html) {
         Document doc = Jsoup.parse(html);
-        DetailledItem item = new DetailledItem();
+        DetailedItem item = new DetailedItem();
 
         if (doc.select(".cover").size() > 0) {
             Element cover = doc.select(".cover").first();
@@ -517,14 +521,14 @@ public class WinBiap extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResult(int position) throws IOException,
+    public DetailedItem getResult(int position) throws IOException,
             OpacErrorException {
         // Should not be called because every media has an ID
         return null;
     }
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account account,
+    public ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException {
         if (selection == null) {
             // Which copy?
@@ -556,35 +560,32 @@ public class WinBiap extends BaseApi implements OpacApi {
             String reservationUrl = new URL(new URL(opac_url), selection).toString();
             // the URL stored in selection contains "=" and other things inside params
             // and will be messed up by our cleanUrl function, therefore we use a direct HttpGet
-            Document doc = Jsoup.parse(convertStreamToString(
-                    http_client.execute(new HttpGet(
-                            reservationUrl))
-                               .getEntity().getContent()));
+            Document doc = Jsoup.parse(httpGet(reservationUrl, getDefaultEncoding()));
             if (doc.select("[id$=LabelLoginMessage]").size() > 0) {
                 doc.select("[id$=TextBoxLoginName]").val(account.getName());
                 doc.select("[id$=TextBoxLoginPassword]").val(account.getPassword());
                 FormElement form = (FormElement) doc.select("form").first();
 
                 List<Connection.KeyVal> formData = form.formData();
-                List<NameValuePair> params = new ArrayList<>();
+                FormBody.Builder paramBuilder = new FormBody.Builder();
                 for (Connection.KeyVal kv : formData) {
                     if (!kv.key().contains("Button") || kv.key().endsWith("ButtonLogin")) {
-                        params.add(new BasicNameValuePair(kv.key(), kv.value()));
+                        paramBuilder.add(kv.key(), kv.value());
                     }
                 }
                 doc = Jsoup.parse(httpPost(opac_url + "/user/" + form.attr("action"),
-                        new UrlEncodedFormEntity(params), getDefaultEncoding()));
+                        paramBuilder.build(), getDefaultEncoding()));
             }
             FormElement confirmationForm = (FormElement) doc.select("form").first();
             List<Connection.KeyVal> formData = confirmationForm.formData();
-            List<NameValuePair> params = new ArrayList<>();
+            FormBody.Builder paramBuilder = new FormBody.Builder();
             for (Connection.KeyVal kv : formData) {
                 if (!kv.key().contains("Button") || kv.key().endsWith("ButtonVorbestOk")) {
-                    params.add(new BasicNameValuePair(kv.key(), kv.value()));
+                    paramBuilder.add(kv.key(), kv.value());
                 }
             }
             httpPost(opac_url + "/user/" + confirmationForm.attr("action"),
-                    new UrlEncodedFormEntity(params), getDefaultEncoding());
+                    paramBuilder.build(), getDefaultEncoding());
 
             // TODO: handle errors (I did not encounter any)
 
@@ -605,9 +606,9 @@ public class WinBiap extends BaseApi implements OpacApi {
         lentPage.select("input[name=" + media + "]").first().attr("checked", true);
         List<Connection.KeyVal> formData =
                 ((FormElement) lentPage.select("form").first()).formData();
-        List<NameValuePair> params = new ArrayList<>();
+        FormBody.Builder paramBuilder = new FormBody.Builder();
         for (Connection.KeyVal kv : formData) {
-            params.add(new BasicNameValuePair(kv.key(), kv.value()));
+            paramBuilder.add(kv.key(), kv.value());
         }
 
         if (lentPage.select("a[id$=ButtonBorrowChecked][href^=javascript]").size() > 0) {
@@ -619,24 +620,23 @@ public class WinBiap extends BaseApi implements OpacApi {
                 return new ProlongResult(MultiStepResult.Status.ERROR,
                         StringProvider.INTERNAL_ERROR);
             }
-            params.add(new BasicNameValuePair("__EVENTTARGET", matcher.group(1)));
-            params.add(new BasicNameValuePair("__EVENTARGUMENT", matcher.group(2)));
+            paramBuilder.add("__EVENTTARGET", matcher.group(1));
+            paramBuilder.add("__EVENTARGUMENT", matcher.group(2));
         }
 
-        String html = httpPost(opac_url + "/user/borrow.aspx", new UrlEncodedFormEntity
-                (params), getDefaultEncoding());
+        String html = httpPost(opac_url + "/user/borrow.aspx", paramBuilder.build(), getDefaultEncoding());
         Document confirmationPage = Jsoup.parse(html);
 
         FormElement confirmationForm = (FormElement) confirmationPage.select("form").first();
         List<Connection.KeyVal> formData2 = confirmationForm.formData();
-        List<NameValuePair> params2 = new ArrayList<>();
+        FormBody.Builder params2 = new FormBody.Builder();
         for (Connection.KeyVal kv : formData2) {
             if (!kv.key().contains("Button") || kv.key().endsWith("ButtonProlongationOk")) {
-                params2.add(new BasicNameValuePair(kv.key(), kv.value()));
+                params2.add(kv.key(), kv.value());
             }
         }
         httpPost(opac_url + "/user/" + confirmationForm.attr("action"),
-                new UrlEncodedFormEntity(params2), getDefaultEncoding());
+                params2.build(), getDefaultEncoding());
 
         // TODO: handle errors (I did not encounter any)
 
@@ -657,19 +657,36 @@ public class WinBiap extends BaseApi implements OpacApi {
         } catch (OpacErrorException e) {
             return new CancelResult(MultiStepResult.Status.ERROR, e.getMessage());
         }
-        List<NameValuePair> params = new ArrayList<>();
-        params.add(new BasicNameValuePair("action", "reservationdelete"));
-        params.add(new BasicNameValuePair("data", media));
+        FormBody.Builder params = new FormBody.Builder();
+        params.add("action", "reservationdelete");
+        params.add("data", media);
         String response = httpPost(opac_url + "/service/UserService.ashx",
-                new UrlEncodedFormEntity(params), getDefaultEncoding());
-        System.out.println("Antwort: " + response);
-        // Response: [number of reservations deleted];[number of remaining reservations]
-        String[] parts = response.split(";");
-        if (parts[0].equals("1")) {
-            return new CancelResult(MultiStepResult.Status.OK);
+                params.build(), getDefaultEncoding());
+        if (response.startsWith("{")) {
+            // new system (starting with 4.4.0?): JSON response
+            // e.g. {"Success":true,"Count":0} (Count = number of remaining reservations)
+            try {
+                JSONObject responseJson = new JSONObject(response);
+                if (responseJson.optBoolean("Success")) {
+                    return new CancelResult(MultiStepResult.Status.OK);
+                } else {
+                    return new CancelResult(MultiStepResult.Status.ERROR,
+                            stringProvider.getString(StringProvider.UNKNOWN_ERROR));
+                }
+            } catch (JSONException e) {
+                return new CancelResult(MultiStepResult.Status.ERROR,
+                        stringProvider.getString(StringProvider.INTERNAL_ERROR));
+            }
         } else {
-            return new CancelResult(MultiStepResult.Status.ERROR,
-                    stringProvider.getString(StringProvider.UNKNOWN_ERROR));
+            // Old system
+            // Response: [number of reservations deleted];[number of remaining reservations]
+            String[] parts = response.split(";");
+            if (parts[0].equals("1")) {
+                return new CancelResult(MultiStepResult.Status.OK);
+            } else {
+                return new CancelResult(MultiStepResult.Status.ERROR,
+                        stringProvider.getString(StringProvider.UNKNOWN_ERROR));
+            }
         }
     }
 
@@ -685,19 +702,21 @@ public class WinBiap extends BaseApi implements OpacApi {
             if (!fees.equals("ausgeglichen")) adata.setPendingFees(fees);
         }
 
-        Document lentPage = Jsoup.parse(
-                httpGet(opac_url + "/user/borrow.aspx", getDefaultEncoding()));
-        adata.setLent(parseMediaList(lentPage));
+        String lentUrl = opac_url + "/user/borrow.aspx";
+        Document lentPage = Jsoup.parse(httpGet(lentUrl, getDefaultEncoding()));
+        lentPage.setBaseUri(lentUrl);
+        adata.setLent(parseMediaList(lentPage, data));
 
-        Document reservationsPage = Jsoup.parse(
-                httpGet(opac_url + "/user/reservations.aspx", getDefaultEncoding()));
+        String resUrl = opac_url + "/user/reservations.aspx";
+        Document reservationsPage = Jsoup.parse(httpGet(resUrl, getDefaultEncoding()));
+        reservationsPage.setBaseUri(resUrl);
         adata.setReservations(parseResList(reservationsPage, stringProvider, data));
 
 
         return adata;
     }
 
-    static List<LentItem> parseMediaList(Document doc) {
+    static List<LentItem> parseMediaList(Document doc, JSONObject data) {
         List<LentItem> lent = new ArrayList<>();
 
         DateTimeFormatter fmt = DateTimeFormat.forPattern("dd.MM.yyyy").withLocale(Locale.GERMAN);
@@ -719,10 +738,20 @@ public class WinBiap extends BaseApi implements OpacApi {
             Element detailsTr = winBiap43 ? tr.nextElementSibling() : tr;
 
             // the second column contains an img tag with the cover
-            if (tr.select(".cover, img[id*=ImageCover]").size() > 0) {
+            if (detailsTr.select(".cover, img[id*=ImageCover]").size() > 0) {
                 // find media ID using cover URL
-                Map<String, String> params = getQueryParamsFirst(tr.select(".cover").attr("src"));
+                Element cover = detailsTr.select(".cover, img[id*=ImageCover]").first();
+                String src = cover.attr("abs:data-src");
+                if (src.equals("")) src = cover.attr("abs:src");
+                Map<String, String> params = getQueryParamsFirst(src);
                 if (params.containsKey("catid")) item.setId(params.get("catid"));
+
+                // find media type
+                SearchResult.MediaType mt = getMediaType(cover, data);
+                item.setMediaType(mt);
+
+                // set cover if it's not the media type image
+                if (!src.equals(cover.attr("grp"))) item.setCover(src);
             }
 
             item.setAuthor(nullIfEmpty(tr.select("[id$=LabelAutor]").text()));
@@ -786,15 +815,23 @@ public class WinBiap extends BaseApi implements OpacApi {
             Element detailsTr = winBiap43 ? tr.nextElementSibling() : tr;
 
             // the second column contains an img tag with the cover
-            if (tr.select(".cover").size() > 0) {
+            if (detailsTr.select(".cover, img[id*=ImageCover]").size() > 0) {
                 // find media ID using cover URL
-                Map<String, String> params = getQueryParamsFirst(tr.select(".cover").attr("src"));
+                Element cover = detailsTr.select(".cover, img[id*=ImageCover]").first();
+                String src = cover.attr("abs:data-src");
+                if (src.equals("")) src = cover.attr("abs:src");
+                Map<String, String> params = getQueryParamsFirst(src);
                 if (params.containsKey("catid")) item.setId(params.get("catid"));
+
                 // find media type
-                SearchResult.MediaType mt = getMediaType(tr.select(".cover").first(), data);
+                SearchResult.MediaType mt = getMediaType(cover, data);
                 if (mt != null) {
                     item.setFormat(stringProvider.getMediaTypeName(mt));
+                    item.setMediaType(mt);
                 }
+
+                // set cover if it's not the media type image
+                if (!src.equals(cover.attr("grp"))) item.setCover(src);
             }
 
             item.setStatus(nullIfEmpty(winBiap43 ? detailsTr.select("[id$=labelStatus], [id*=labelStatus_]").text() :
@@ -849,7 +886,7 @@ public class WinBiap extends BaseApi implements OpacApi {
     }
 
     @Override
-    public List<SearchField> getSearchFields() throws IOException {
+    public List<SearchField> parseSearchFields() throws IOException {
         // extract branches and categories
         String html = httpGet(opac_url + "/search.aspx", getDefaultEncoding());
         Document doc = Jsoup.parse(html);
@@ -963,7 +1000,7 @@ public class WinBiap extends BaseApi implements OpacApi {
     protected Document login(Account account) throws IOException, OpacErrorException {
         Document loginPage = Jsoup.parse(
                 httpGet(opac_url + "/user/login.aspx", getDefaultEncoding()));
-        List<NameValuePair> data = new ArrayList<>();
+        FormBody.Builder data = new FormBody.Builder();
 
         String formAction = loginPage.select("form").attr("action");
         boolean homePage = formAction.endsWith("index.aspx");
@@ -971,31 +1008,33 @@ public class WinBiap extends BaseApi implements OpacApi {
         /* pass all input fields beginning with two underscores to login url */
         Elements inputFields = loginPage.select("input[id^=__]");
         for (Element inputField : inputFields) {
-            data.add(new BasicNameValuePair(inputField.attr("name"), inputField.val()));
+            data.add(inputField.attr("name"), inputField.val());
         }
 
         // Some WinBiap 4.4 installations (such as Neufahrn) redirect user/login.aspx to index.aspx
         // This page then also has a login form, but it has different text box IDs:
         // TextBoxLoginName -> TextBoxUsername and TextBoxLoginPassword -> TextBoxPassword
 
-        data.add(new BasicNameValuePair(
-                loginPage.select("input[id$=TextBoxLoginName], input[id$=TextBoxUsername]")
-                         .attr("name"), account.getName()));
-        data.add(new BasicNameValuePair(
-                loginPage.select("input[id$=TextBoxLoginPassword], input[id$=TextBoxPassword]")
-                         .attr("name"), account.getPassword()));
-        data.add(new BasicNameValuePair(loginPage.select("input[id$=ButtonLogin]").attr("name"),
-                "Anmelden"));
+        data.add(loginPage.select("input[id$=TextBoxLoginName], input[id$=TextBoxUsername]")
+                         .attr("name"), account.getName());
+        data.add(loginPage.select("input[id$=TextBoxLoginPassword], input[id$=TextBoxPassword]")
+                         .attr("name"), account.getPassword());
+        data.add(loginPage.select("input[id$=ButtonLogin]").attr("name"),
+                "Anmelden");
 
         // We also need to POST our data to the correct page.
         String postUrl = opac_url + (homePage ? "/index.aspx" : "/user/login.aspx");
-        String html = httpPost(postUrl, new UrlEncodedFormEntity(data), "UTF-8");
+        String html = httpPost(postUrl, data.build(), "UTF-8");
         Document doc = Jsoup.parse(html);
-        if (doc.select("#ctl00_ContentPlaceHolderMain_LabelLoginMessage").size() > 0) {
-            throw new OpacErrorException(
-                    doc.select("#ctl00_ContentPlaceHolderMain_LabelLoginMessage").text());
-        }
+        handleLoginErrors(doc);
         return doc;
+    }
+
+    static void handleLoginErrors(Document doc) throws OpacErrorException {
+        String errorSelector = "span[id$=LabelLoginMessage]";
+        if (doc.select(errorSelector).size() > 0) {
+            throw new OpacErrorException(doc.select(errorSelector).text());
+        }
     }
 
     @Override

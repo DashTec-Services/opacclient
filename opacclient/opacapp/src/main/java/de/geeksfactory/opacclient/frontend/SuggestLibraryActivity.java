@@ -26,20 +26,23 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.Serializable;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 
 import de.geeksfactory.opacclient.R;
+import de.geeksfactory.opacclient.utils.DebugTools;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
 
 public class SuggestLibraryActivity extends AppCompatActivity {
 
     private static final String LOG_TAG = "Opac";
-    private static final String GEOCODE_API = "https://maps.googleapis.com/maps/api/geocode/json";
+    private static final String GEOCODE_API =
+            "https://maps.googleapis.com/maps/api/place/autocomplete/json";
+    private static final String DETAIL_API =
+            "https://maps.googleapis.com/maps/api/place/details/json?placeid=";
+    private static final String API_KEY = "AIzaSyDau_9TkGF8hVqLlcHhq6yDUUN9c3rqehU";
     private AutoCompleteTextView etCity;
     private EditText etName;
     private EditText etComment;
@@ -176,67 +179,71 @@ public class SuggestLibraryActivity extends AppCompatActivity {
 
     private ArrayList<City> autocomplete(String input) {
         ArrayList<City> resultList = null;
+        OkHttpClient client = DebugTools.prepareHttpClient(new OkHttpClient.Builder()).build();
 
-        HttpURLConnection conn = null;
-        StringBuilder jsonResults = new StringBuilder();
+        String jsonResults;
         try {
-
-            URL url = new URL(
-                    GEOCODE_API + "?sensor=false" + "&language=de" + "&region=de" + "&address=" +
-                            URLEncoder.encode(input, "utf8"));
-            conn = (HttpURLConnection) url.openConnection();
-            InputStreamReader in = new InputStreamReader(conn.getInputStream());
-
-            // Load the results into a StringBuilder
-            int read;
-            char[] buff = new char[1024];
-            while ((read = in.read(buff)) != -1) {
-                jsonResults.append(buff, 0, read);
-            }
-        } catch (MalformedURLException e) {
-            Log.e(LOG_TAG, "Error processing Places API URL", e);
-            return null;
+            Request request = new Request.Builder().url(
+                    GEOCODE_API + "?input=" + URLEncoder.encode(input, "utf8") + "&types=(cities)" +
+                            "&language=" + getResources().getConfiguration().locale.getLanguage() +
+                            "&key=" + API_KEY).build();
+            jsonResults = client.newCall(request).execute().body().string();
         } catch (IOException e) {
             Log.e(LOG_TAG, "Error connecting to Places API", e);
             return null;
-        } finally {
-            if (conn != null) {
-                conn.disconnect();
-            }
         }
 
         try {
             // Create a JSON object hierarchy from the results
-            JSONObject jsonObj = new JSONObject(jsonResults.toString());
-            JSONArray resultsJsonArray = jsonObj.getJSONArray("results");
+            JSONObject jsonObj = new JSONObject(jsonResults);
+            JSONArray resultsJsonArray = jsonObj.getJSONArray("predictions");
 
-            // Extract the Place descriptions from the results
+            // Extract data from the results
             resultList = new ArrayList<>();
             for (int i = 0; i < resultsJsonArray.length(); i++) {
                 JSONObject result = resultsJsonArray.getJSONObject(i);
-                if (contains(result.getJSONArray("types"), "locality")) {
-                    JSONArray addressComponents = result
-                            .getJSONArray("address_components");
-                    City city = new City();
-                    for (int j = 0; j < addressComponents.length(); j++) {
-                        JSONObject component = addressComponents
-                                .getJSONObject(j);
-                        if (contains(component.getJSONArray("types"),
-                                "locality")) {
-                            city.name = component.getString("long_name");
-                        } else if (contains(component.getJSONArray("types"),
-                                "administrative_area_level_1")) {
-                            city.state = component.getString("long_name");
-                        } else if (contains(component.getJSONArray("types"),
-                                "country")) {
-                            city.country = component.getString("long_name");
+                String placeid = result.getString("place_id");
+                String jsonDetailedResults;
+                try {
+                    Request request = new Request.Builder().url(
+                            DETAIL_API + URLEncoder.encode(placeid, "utf8") + "&language=" +
+                                    getResources().getConfiguration().locale.getLanguage() +
+                                    "&key=" + API_KEY).build();
+                    jsonDetailedResults = client.newCall(request).execute().body().string();
+                } catch (IOException e) {
+                    Log.e(LOG_TAG, "Error connecting to Places API", e);
+                    return null;
+                }
+
+                try {
+                    JSONObject jsonDetailObj = new JSONObject(jsonDetailedResults);
+                    JSONObject detailResult = jsonDetailObj.getJSONObject("result");
+                    if (contains(detailResult.getJSONArray("types"), "locality")) {
+                        JSONArray addressComponents = detailResult
+                                .getJSONArray("address_components");
+                        City city = new City();
+                        for (int j = 0; j < addressComponents.length(); j++) {
+                            JSONObject component = addressComponents
+                                    .getJSONObject(j);
+                            if (contains(component.getJSONArray("types"),
+                                    "locality")) {
+                                city.name = component.getString("long_name");
+                            } else if (contains(component.getJSONArray("types"),
+                                    "administrative_area_level_1")) {
+                                city.state = component.getString("long_name");
+                            } else if (contains(component.getJSONArray("types"),
+                                    "country")) {
+                                city.country = component.getString("long_name");
+                            }
                         }
+                        city.lat = detailResult.getJSONObject("geometry")
+                                               .getJSONObject("location").getDouble("lat");
+                        city.lon = detailResult.getJSONObject("geometry")
+                                               .getJSONObject("location").getDouble("lng");
+                        resultList.add(city);
                     }
-                    city.lat = result.getJSONObject("geometry")
-                                     .getJSONObject("location").getDouble("lat");
-                    city.lon = result.getJSONObject("geometry")
-                                     .getJSONObject("location").getDouble("lng");
-                    resultList.add(city);
+                } catch (JSONException e) {
+                    Log.e(LOG_TAG, "Cannot process JSON results", e);
                 }
             }
         } catch (JSONException e) {

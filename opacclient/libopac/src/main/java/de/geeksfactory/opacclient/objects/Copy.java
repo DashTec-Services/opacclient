@@ -23,7 +23,7 @@ import org.joda.time.format.DateTimeFormatter;
 import org.joda.time.format.ISODateTimeFormat;
 
 /**
- * Represents a copy of a medium ({@link DetailledItem}) available in a library.
+ * Represents a copy of a medium ({@link DetailedItem}) available in a library.
  */
 public class Copy {
     private String barcode;
@@ -153,7 +153,7 @@ public class Copy {
 
     /**
      * @return Reservation information for copy-based reservations. Intended for use in your {@link
-     * de.geeksfactory.opacclient.apis.OpacApi#reservation(DetailledItem, Account, int, String)}
+     * de.geeksfactory.opacclient.apis.OpacApi#reservation(DetailedItem, Account, int, String)}
      * implementation.
      */
     public String getResInfo() {
@@ -162,7 +162,7 @@ public class Copy {
 
     /**
      * @param resInfo Reservation information for copy-based reservations. Intended for use in your
-     *                {@link de.geeksfactory.opacclient.apis.OpacApi#reservation (DetailledItem,
+     *                {@link de.geeksfactory.opacclient.apis.OpacApi#reservation (DetailedItem,
      *                Account, int, String)} implementation.
      */
     public void setResInfo(String resInfo) {
@@ -226,6 +226,7 @@ public class Copy {
                 break;
             case "url":
                 setUrl(value);
+                break;
             default:
                 throw new IllegalArgumentException("key unknown");
         }
@@ -250,7 +251,9 @@ public class Copy {
      */
     public void set(String key, String value, DateTimeFormatter fmt) {
         if (key.equals("returndate")) {
-            setReturnDate(fmt.parseLocalDate(value));
+            if (!value.isEmpty()) {
+                setReturnDate(fmt.parseLocalDate(value));
+            }
         } else {
             set(key, value);
         }
@@ -309,5 +312,21 @@ public class Copy {
                 || getShelfmark() != null
                 || getResInfo() != null
                 || getUrl() != null;
+    }
+
+    @Override
+    public String toString() {
+        return "Copy{" +
+                "barcode='" + barcode + '\'' +
+                ", location='" + location + '\'' +
+                ", department='" + department + '\'' +
+                ", branch='" + branch + '\'' +
+                ", status='" + status + '\'' +
+                ", returnDate=" + returnDate +
+                ", reservations='" + reservations + '\'' +
+                ", shelfmark='" + shelfmark + '\'' +
+                ", resInfo='" + resInfo + '\'' +
+                ", url='" + url + '\'' +
+                '}';
     }
 }

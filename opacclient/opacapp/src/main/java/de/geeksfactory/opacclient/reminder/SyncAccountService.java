@@ -29,8 +29,12 @@ import android.util.Log;
 
 import com.commonsware.cwac.wakeful.WakefulIntentService;
 
+import org.acra.ACRA;
+import org.joda.time.DateTime;
+import org.joda.time.Hours;
 import org.json.JSONException;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.List;
 
@@ -41,11 +45,15 @@ import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Library;
 import de.geeksfactory.opacclient.storage.AccountDataSource;
+import de.geeksfactory.opacclient.storage.JsonSearchFieldDataSource;
+import de.geeksfactory.opacclient.storage.PreferenceDataSource;
+import de.geeksfactory.opacclient.webservice.LibraryConfigUpdateService;
+import de.geeksfactory.opacclient.webservice.WebService;
+import de.geeksfactory.opacclient.webservice.WebServiceManager;
 
 public class SyncAccountService extends WakefulIntentService {
 
     private static final String NAME = "SyncAccountService";
-    private boolean failed = false;
 
     public SyncAccountService() {
         super(NAME);
@@ -54,6 +62,8 @@ public class SyncAccountService extends WakefulIntentService {
     @Override
     protected void doWakefulWork(Intent intent) {
         if (BuildConfig.DEBUG) Log.i(NAME, "SyncAccountService started");
+
+        updateLibraryConfig();
 
         SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(this);
 
@@ -65,11 +75,15 @@ public class SyncAccountService extends WakefulIntentService {
         ConnectivityManager connMgr = (ConnectivityManager) getSystemService(
                 Context.CONNECTIVITY_SERVICE);
         NetworkInfo networkInfo = connMgr.getActiveNetworkInfo();
+        boolean failed;
         if (networkInfo != null) {
             if (!sp.getBoolean("notification_service_wifionly", false) ||
                     networkInfo.getType() == ConnectivityManager.TYPE_WIFI ||
                     networkInfo.getType() == ConnectivityManager.TYPE_ETHERNET) {
-                syncAccounts();
+                OpacClient app = (OpacClient) getApplication();
+                AccountDataSource data = new AccountDataSource(this);
+                ReminderHelper helper = new ReminderHelper(app);
+                failed = syncAccounts(app, data, sp, helper);
             } else {
                 failed = true;
             }
@@ -92,38 +106,78 @@ public class SyncAccountService extends WakefulIntentService {
         }
     }
 
-    private void syncAccounts() {
-        OpacClient app = (OpacClient) getApplication();
-        AccountDataSource data = new AccountDataSource(this);
-        data.open();
-        List<Account> accounts = data.getAccountsWithPassword();
-        data.close();
-
-        for (Account account : accounts) {
-            if (BuildConfig.DEBUG) Log.i(NAME, "Loading data for Account " + account.toString());
-
-            try {
-                Library library = app.getLibrary(account.getLibrary());
-                if (!library.isAccountSupported()) continue;
-                OpacApi api = app.getNewApi(library);
-                AccountData res = api.account(account);
-                if (res == null) continue;
-
-                data.open();
-                account.setPasswordKnownValid(true);
-                data.update(account);
-                data.storeCachedAccountData(account, res);
-                data.close();
-
-                new ReminderHelper(app).generateAlarms();
-
-            } catch (JSONException | IOException | OpacApi.OpacErrorException e) {
-                data.close();
-                e.printStackTrace();
-                failed = true;
-            }
+    private void updateLibraryConfig() {
+        PreferenceDataSource prefs = new PreferenceDataSource(this);
+        if (prefs.getLastLibraryConfigUpdate() != null
+                && prefs.getLastLibraryConfigUpdate()
+                        .isAfter(DateTime.now().minus(Hours.ONE))) {
+            Log.d(NAME, "Do not run updateLibraryConfig as last run was less than an hour ago.");
+            return;
         }
 
+        WebService service = WebServiceManager.getInstance();
+        File filesDir = new File(getFilesDir(), LibraryConfigUpdateService.LIBRARIES_DIR);
+        filesDir.mkdirs();
+        try {
+            int count = ((OpacClient) getApplication()).getUpdateHandler().updateConfig(
+                    service, prefs,
+                    new LibraryConfigUpdateService.FileOutput(filesDir),
+                    new JsonSearchFieldDataSource(this));
+            Log.d(NAME, "updated config for " + String.valueOf(count) + " libraries");
+            ((OpacClient) getApplication()).resetCache();
+            if (!BuildConfig.DEBUG) {
+                ACRA.getErrorReporter().putCustomData("data_version",
+                        prefs.getLastLibraryConfigUpdate().toString());
+            }
+        } catch (IOException | JSONException ignore) {
+
+        }
+    }
+
+    boolean syncAccounts(OpacClient app, AccountDataSource data, SharedPreferences sp,
+            ReminderHelper helper) {
+        boolean failed = false;
+        List<Account> accounts = data.getAccountsWithPassword();
+
+        if (!sp.contains("update_151_clear_cache")) {
+            data.invalidateCachedData();
+            sp.edit().putBoolean("update_151_clear_cache", true).apply();
+       }
+
+        for (Account account : accounts) {
+            if (BuildConfig.DEBUG)
+                Log.i(NAME, "Loading data for Account " + account.toString());
+
+            AccountData res;
+            try {
+                Library library = app.getLibrary(account.getLibrary());
+                if (!library.isAccountSupported()) {
+                    data.deleteAccountData(account);
+                    continue;
+                }
+                OpacApi api = app.getNewApi(library);
+                res = api.account(account);
+                if (res == null) {
+                    failed = true;
+                    continue;
+                }
+            } catch (JSONException | IOException | OpacApi.OpacErrorException e) {
+                e.printStackTrace();
+                failed = true;
+                continue;
+            } catch (OpacClient.LibraryRemovedException e) {
+                continue;
+            }
+
+            account.setPasswordKnownValid(true);
+            try {
+                data.update(account);
+                data.storeCachedAccountData(account, res);
+            } finally {
+                helper.generateAlarms();
+            }
+        }
+        return failed;
     }
 
 }

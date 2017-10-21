@@ -21,6 +21,7 @@
  */
 package de.geeksfactory.opacclient.objects;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -42,12 +43,14 @@ public class Library implements Comparable<Library> {
     private String country;
     private String state;
     private String replacedby;
+    private boolean active = true;
 
     private String information;
     private double[] geo;
     private float geo_distance;
     private boolean account_supported;
     private boolean nfcSupported;
+    private boolean suppressFeeWarnings = false;
 
     /**
      * Create a Library object based on a <code>JSONObject</code>.
@@ -70,30 +73,62 @@ public class Library implements Comparable<Library> {
         lib.setData(input.getJSONObject("data"));
         lib.setAccountSupported(input.getBoolean("account_supported"));
         lib.setNfcSupported(input.optBoolean("nfc_supported", false));
+        lib.setSuppressFeeWarnings(lib.getData().optBoolean("suppress_fee_warnings", false));
 
-        lib.setInformation(input.getString("information"));
+        lib.setInformation(input.optString("information"));
         if (lib.getInformation() == null && lib.getData().has("information")) {
             // Backwards compatibility
-            lib.setInformation(lib.getData().getString("information"));
+            lib.setInformation(lib.getData().optString("information"));
         }
 
-        if (input.has("displayname"))
+        if (input.has("displayname")) {
             lib.setDisplayName(input.getString("displayname"));
+        }
 
-        if (input.has("replacedby"))
-            lib.setReplacedBy(input.getString("replacedby"));
+        if (input.has("_plus_store_url") && !input.isNull("_plus_store_url")) {
+            lib.setReplacedBy(input.getString("_plus_store_url"));
+        }
 
-        if (input.has("geo")) {
+        if (input.has("geo") && !input.isNull("geo")) {
             double[] geo = new double[2];
             geo[0] = input.getJSONArray("geo").getDouble(0);
             geo[1] = input.getJSONArray("geo").getDouble(1);
             lib.setGeo(geo);
         }
 
+        if (input.has("_active")) {
+            lib.setActive(input.getBoolean("_active"));
+        }
+
         if (lib.getTitle().equals(""))
             lib.setTitle(null);
 
         return lib;
+    }
+
+    public JSONObject toJSON() throws JSONException {
+        JSONObject json = new JSONObject();
+        json.put("api", api);
+        json.put("city", city);
+        json.put("title", title);
+        json.put("country", country);
+        json.put("state", state);
+        json.put("data", data);
+        json.put("account_supported", account_supported);
+        json.put("nfc_supported", nfcSupported);
+        json.put("information", information);
+        if (displayName != null) json.put("displayname", displayName);
+        json.put("_plus_store_url", replacedby);
+        if (geo != null) {
+            JSONArray geoJson = new JSONArray();
+            geoJson.put(geo[0]);
+            geoJson.put(geo[1]);
+            json.put("geo", geoJson);
+        } else {
+            json.put("geo", (Object) null);
+        }
+        json.put("_active", active);
+        return json;
     }
 
     /**
@@ -330,6 +365,30 @@ public class Library implements Comparable<Library> {
         this.geo_distance = geo_distance;
     }
 
+    /**
+     * Get if this library's configuration is "active". Defaults to true. When a library needs to be
+     * removed from the app, this is set to false.
+     */
+    public boolean isActive() {
+        return active;
+    }
+
+    /**
+     * Set if this library's configuration is "active". Defaults to true. When a library needs to be
+     * removed from the app, set thi to false.
+     */
+    public void setActive(boolean active) {
+        this.active = active;
+    }
+
+    public boolean isSuppressFeeWarnings() {
+        return suppressFeeWarnings;
+    }
+
+    public void setSuppressFeeWarnings(boolean suppressFeeWarnings) {
+        this.suppressFeeWarnings = suppressFeeWarnings;
+    }
+
     @Override
     public int compareTo(Library arg0) {
         Collator deCollator = Collator.getInstance(Locale.GERMAN);
@@ -376,5 +435,4 @@ public class Library implements Comparable<Library> {
             return false;
         return true;
     }
-
 }

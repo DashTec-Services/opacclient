@@ -29,9 +29,8 @@ import java.util.Map;
 import de.geeksfactory.opacclient.i18n.StringProvider;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.LentItem;
-import de.geeksfactory.opacclient.objects.Library;
 import de.geeksfactory.opacclient.objects.ReservedItem;
 
 /**
@@ -42,7 +41,7 @@ import de.geeksfactory.opacclient.objects.ReservedItem;
 public class PicaOld extends Pica {
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account account,
+    public ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException {
         try {
             if (selection == null || !selection.startsWith("{")) {
@@ -123,8 +122,11 @@ public class PicaOld extends Pica {
                     }
 
                 } else {
-                    String html1 = httpGet(json.getJSONObject(selectedPos)
-                                               .getString("link"), getDefaultEncoding());
+                    String url = json.getJSONObject(selectedPos).getString("link");
+                    if (!url.contains("LNG=")) {
+                        url = url.replace("DB=", "LNG=" + getLang() + "/DB=");
+                    }
+                    String html1 = httpGet(url, getDefaultEncoding());
                     Document doc1 = Jsoup.parse(html1);
 
                     Map<String, String> params = new HashMap<>();
@@ -142,6 +144,17 @@ public class PicaOld extends Pica {
                             selections.add(selopt);
                         }
                         res.setSelection(selections);
+                        return res;
+                    } else if (useraction == 0 && doc1.select("table[summary=title data]").size() > 0) {
+                        ReservationResult res = new ReservationResult(MultiStepResult.Status.CONFIRMATION_NEEDED);
+                        List<String[]> details = new ArrayList<>();
+                        for (Element tr : doc1.select("table[summary=title data] tr")) {
+                            details.add(new String[]{
+                                    tr.select("td").first().text(),
+                                    tr.select("td").last().text()
+                            });
+                        }
+                        res.setDetails(details);
                         return res;
                     } else {
                         params.put("CTRID", selection);
@@ -428,6 +441,8 @@ public class PicaOld extends Pica {
                 Elements datatrs = tr.select("table[summary=title data] tr");
                 item.setTitle(datatrs.get(0).text());
 
+                String reservations = null;
+
                 for (Element td : datatrs.get(1).select("td")) {
                     List<TextNode> textNodes = td.textNodes();
                     Elements titles = td.select("span.label-small");
@@ -472,7 +487,7 @@ public class PicaOld extends Pica {
                                     || title.contains("reservations")
                                     || title.contains("reserveringen")
                                     || title.contains("réservations")) {
-                                // not supported
+                                reservations = value;
                             }
                     }
                 }
@@ -507,9 +522,22 @@ public class PicaOld extends Pica {
                     status += reminderCount + " " + stringProvider
                             .getString(StringProvider.REMINDERS) + ", ";
                 }
-                if (!status.equals("")) status += ", ";
-                status += prolongCount + "x " + stringProvider
-                        .getString(StringProvider.PROLONGED_ABBR);
+                if (!"".equals(prolongCount)) {
+                    if (!status.equals("")) status += ", ";
+                    status += prolongCount + "x " + stringProvider
+                            .getString(StringProvider.PROLONGED_ABBR);
+                }
+                if (tr.children().size() >= 26 && !"".equals(tr.child(25).text().trim())) {
+                    if (!status.equals("")) status += ", ";
+                    try {
+                        status +=
+                                stringProvider.getQuantityString(StringProvider.RESERVATIONS_NUMBER,
+                                        Integer.parseInt(tr.child(25).text().trim()),
+                                        Integer.parseInt(tr.child(25).text().trim()));
+                    } catch (NumberFormatException e) {
+                        // pass
+                    }
+                }
                 // + tr.child(25).text().trim() + " Vormerkungen");
                 item.setStatus(status);
                 try {
@@ -616,8 +644,10 @@ public class PicaOld extends Pica {
         Document doc = Jsoup.parse(html);
 
         if (doc.select(".cnt .alert, .cnt .error").size() > 0) {
-            throw new OpacErrorException(doc.select(".cnt .alert, .cnt .error")
-                                            .text());
+            String text = doc.select(".cnt .alert, .cnt .error").text();
+            if (doc.select("table[summary^=User data]").size() == 0) {
+                throw new OpacErrorException(text);
+            }
         }
     }
 

@@ -18,10 +18,6 @@
  */
 package de.geeksfactory.opacclient.apis;
 
-import org.apache.http.HttpEntity;
-import org.apache.http.entity.ContentType;
-import org.apache.http.entity.StringEntity;
-import org.apache.http.entity.mime.MultipartEntityBuilder;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 import org.json.JSONException;
@@ -32,8 +28,9 @@ import org.jsoup.nodes.Element;
 import org.jsoup.nodes.FormElement;
 import org.jsoup.select.Elements;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -48,17 +45,30 @@ import de.geeksfactory.opacclient.networking.NotReachableException;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Copy;
+import de.geeksfactory.opacclient.objects.CoverHolder;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Library;
 import de.geeksfactory.opacclient.objects.SearchRequestResult;
 import de.geeksfactory.opacclient.objects.SearchResult;
+import de.geeksfactory.opacclient.searchfields.BarcodeSearchField;
 import de.geeksfactory.opacclient.searchfields.CheckboxSearchField;
 import de.geeksfactory.opacclient.searchfields.DropdownSearchField;
 import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 import de.geeksfactory.opacclient.searchfields.TextSearchField;
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.FormBody;
+import okhttp3.Headers;
+import okhttp3.MediaType;
+import okhttp3.MultipartBody;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+
+import static okhttp3.MultipartBody.Part.create;
 
 /**
  * API for Bibliotheca+/OPEN OPAC software
@@ -66,7 +76,7 @@ import de.geeksfactory.opacclient.searchfields.TextSearchField;
  * @author Johan von Forstner, 29.03.2015
  */
 
-public class Open extends BaseApi implements OpacApi {
+public class Open extends OkHttpBaseApi implements OpacApi {
     protected JSONObject data;
     protected String opac_url;
     protected Document searchResultDoc;
@@ -224,8 +234,9 @@ public class Open extends BaseApi implements OpacApi {
         for (SearchQuery query : queries) {
             if (query.getValue().equals("") || query.getValue().equals("false")) continue;
 
-            if (query.getSearchField() instanceof TextSearchField) {
-                TextSearchField field = (TextSearchField) query.getSearchField();
+            if (query.getSearchField() instanceof TextSearchField |
+                    query.getSearchField() instanceof BarcodeSearchField) {
+                SearchField field = query.getSearchField();
                 if (field.getData().getBoolean("selectable")) {
                     selectableCount++;
                     if (selectableCount > 3) {
@@ -237,7 +248,7 @@ public class Open extends BaseApi implements OpacApi {
                             doc.select("select[name$=" + number + "SearchField]").first();
                     Element searchValue =
                             doc.select("input[name$=" + number + "SearchValue]").first();
-                    searchField.val(field.getId());
+                    setSelectValue(searchField, field.getId());
                     searchValue.val(query.getValue());
                 } else {
                     Element input = doc.select("input[name=" + field.getId() + "]").first();
@@ -245,8 +256,8 @@ public class Open extends BaseApi implements OpacApi {
                 }
             } else if (query.getSearchField() instanceof DropdownSearchField) {
                 DropdownSearchField field = (DropdownSearchField) query.getSearchField();
-                Element input = doc.select("select[name=" + field.getId() + "]").first();
-                input.val(query.getValue());
+                Element select = doc.select("select[name=" + field.getId() + "]").first();
+                setSelectValue(select, query.getValue());
             } else if (query.getSearchField() instanceof CheckboxSearchField) {
                 CheckboxSearchField field = (CheckboxSearchField) query.getSearchField();
                 Element input = doc.select("input[name=" + field.getId() + "]").first();
@@ -256,13 +267,50 @@ public class Open extends BaseApi implements OpacApi {
 
         // Submit form
         FormElement form = (FormElement) doc.select("form").first();
-        HttpEntity data = formData(form, "BtnSearch").build();
+        MultipartBody data = formData(form, "BtnSearch").build();
         String postUrl = form.attr("abs:action");
 
         String html = httpPost(postUrl, data, "UTF-8");
         Document doc2 = Jsoup.parse(html);
         doc2.setBaseUri(postUrl);
         return parse_search(doc2, 0);
+    }
+
+    protected void setSelectValue(Element select, String value) {
+        for (Element opt : select.select("option")) {
+            if (value.equals(opt.val())) {
+                opt.attr("selected", "selected");
+            } else {
+                opt.removeAttr("selected");
+            }
+        }
+    }
+
+    protected void assignBestCover(final CoverHolder result, final List<String> queue) {
+        if (queue.size() > 0) {
+            final String url = queue.get(0);
+            queue.remove(0);
+            try {
+                asyncHead(url, new Callback() {
+                    @Override
+                    public void onFailure(Call call, IOException e) {
+                        assignBestCover(result, queue);
+                    }
+
+                    @Override
+                    public void onResponse(Call call, Response response) throws IOException {
+                        if (response.code() == 200) {
+                            result.setCover(url);
+                        } else {
+                            assignBestCover(result, queue);
+                        }
+                    }
+                });
+            } catch (IOException e) {
+                e.printStackTrace();
+                assignBestCover(result, queue);
+            }
+        }
     }
 
     protected SearchRequestResult parse_search(Document doc, int page) throws OpacErrorException {
@@ -277,24 +325,37 @@ public class Open extends BaseApi implements OpacApi {
             }
         }
 
-        int totalCount = Integer.parseInt(doc.select("span[id$=TotalItemsLabel]").first().text());
 
-        Elements elements = doc.select("div[id$=divMedium]");
+        int totalCount;
+        if (doc.select("span[id$=TotalItemsLabel]").size() > 0) {
+            totalCount = Integer.parseInt(
+                    doc.select("span[id$=TotalItemsLabel]").first().text().split("[ \\t\\xA0\\u1680\\u180e\\u2000-\\u200a\\u202f\\u205f\\u3000]")[0]);
+        } else {
+            throw new OpacErrorException(stringProvider.getString(StringProvider.UNKNOWN_ERROR));
+        }
+
+        Pattern idPattern = Pattern.compile("\\$(mdv|civ|dcv)(\\d+)\\$");
+        Pattern weakIdPattern = Pattern.compile("(mdv|civ|dcv)(\\d+)[^\\d]");
+
+        Elements elements = doc.select("div[id$=divMedium], div[id$=divComprehensiveItem]");
         List<SearchResult> results = new ArrayList<>();
         int i = 0;
         for (Element element : elements) {
-            SearchResult result = new SearchResult();
+            final SearchResult result = new SearchResult();
             // Cover
             if (element.select("input[id$=mediumImage]").size() > 0) {
                 result.setCover(element.select("input[id$=mediumImage]").first().attr("src"));
             } else if (element.select("img[id$=CoverView_Image]").size() > 0) {
-                result.setCover(getCoverUrl(element.select("img[id$=CoverView_Image]").first()));
+
+                assignBestCover(result, getCoverUrlList(element.select("img[id$=CoverView_Image]").first()));
             }
 
-            Element catalogueContent = element.select(".catalogueContent").first();
+            Element catalogueContent =
+                    element.select(".catalogueContent, .oclc-searchmodule-mediumview-content, .oclc-searchmodule-comprehensiveitemview-content")
+                           .first();
             // Media Type
-            if (catalogueContent.select("#spanMediaGrpIcon").size() > 0) {
-                String mediatype = catalogueContent.select("#spanMediaGrpIcon").attr("class");
+            if (catalogueContent.select("#spanMediaGrpIcon, .spanMediaGrpIcon").size() > 0) {
+                String mediatype = catalogueContent.select("#spanMediaGrpIcon, .spanMediaGrpIcon").attr("class");
                 if (mediatype.startsWith("itemtype ")) {
                     mediatype = mediatype.substring("itemtype ".length());
                 }
@@ -317,28 +378,52 @@ public class Open extends BaseApi implements OpacApi {
             }
 
             // Text
-            String title = catalogueContent.select("a[id$=LbtnShortDescriptionValue]").text();
+            String title = catalogueContent
+                    .select("a[id$=LbtnShortDescriptionValue], a[id$=LbtnTitleValue]").text();
             String subtitle = catalogueContent.select("span[id$=LblSubTitleValue]").text();
             String author = catalogueContent.select("span[id$=LblAuthorValue]").text();
             String year = catalogueContent.select("span[id$=LblProductionYearValue]").text();
-            String publisher = catalogueContent.select("span[id$=LblManufacturerValue]").text();
             String series = catalogueContent.select("span[id$=LblSeriesValue]").text();
+
+            // Some libraries, such as Bern, have labels but no <span id="..Value"> tags
+            int j = 0;
+            for (Element div : catalogueContent.children()) {
+                if (subtitle.equals("") && div.select("span").size() == 0 && j > 0 && j < 3) {
+                    subtitle = div.text().trim();
+                }
+                if (author.equals("") && div.select("span[id$=LblAuthor]").size() == 1) {
+                    author = div.text().trim();
+                    if (author.contains(":")) {
+                        author = author.split(":")[1];
+                    }
+                }
+                if (year.equals("") && div.select("span[id$=LblProductionYear]").size() == 1) {
+                    year = div.text().trim();
+                    if (year.contains(":")) {
+                        year = year.split(":")[1];
+                    }
+                }
+                j++;
+            }
 
             StringBuilder text = new StringBuilder();
             text.append("<b>").append(title).append("</b>");
             if (!subtitle.equals("")) text.append("<br/>").append(subtitle);
             if (!author.equals("")) text.append("<br/>").append(author);
             if (!year.equals("")) text.append("<br/>").append(year);
-            if (!publisher.equals("")) text.append("<br/>").append(publisher);
             if (!series.equals("")) text.append("<br/>").append(series);
 
             result.setInnerhtml(text.toString());
 
             // ID
-            Pattern idPattern = Pattern.compile("\\$mdv(\\d+)\\$");
-            Matcher matcher = idPattern.matcher(catalogueContent.html());
+            Matcher matcher = idPattern.matcher(element.html());
             if (matcher.find()) {
-                result.setId(matcher.group(1));
+                result.setId(matcher.group(2));
+            } else {
+                matcher = weakIdPattern.matcher(element.html());
+                if (matcher.find()) {
+                    result.setId(matcher.group(2));
+                }
             }
 
             // Availability
@@ -349,6 +434,7 @@ public class Open extends BaseApi implements OpacApi {
                 String culture = element.select("input[name$=culture]").val();
                 JSONObject data = new JSONObject();
                 try {
+
                     // Determine portalID value
                     int portalId = 1;
                     for (Element scripttag : doc.select("script")) {
@@ -367,23 +453,40 @@ public class Open extends BaseApi implements OpacApi {
                     data.put("portalId", portalId).put("mednr", result.getId())
                         .put("culture", culture).put("requestCopyData", false)
                         .put("branchFilter", "");
-                    StringEntity entity = new StringEntity(data.toString());
-                    entity.setContentType(ContentType.APPLICATION_JSON.getMimeType());
-                    String json = httpPost(url, entity, getDefaultEncoding());
-                    JSONObject availabilityData = new JSONObject(json);
-                    String isAvail = availabilityData.getJSONObject("d").getString("IsAvail");
-                    switch (isAvail) {
-                        case "true":
-                            result.setStatus(SearchResult.Status.GREEN);
-                            break;
-                        case "false":
-                            result.setStatus(SearchResult.Status.RED);
-                            break;
-                        case "digital":
-                            result.setStatus(SearchResult.Status.UNKNOWN);
-                            break;
-                    }
+                    RequestBody entity = RequestBody.create(MEDIA_TYPE_JSON, data.toString());
 
+                    asyncPost(url, entity, new Callback() {
+                        @Override
+                        public void onFailure(Call call, IOException e) {
+                            // ignore
+                        }
+
+                        @Override
+                        public void onResponse(Call call, Response response) throws IOException {
+                            if (response.code() != 200) {
+                                return;
+                            }
+                            try {
+                                JSONObject availabilityData =
+                                        new JSONObject(response.body().string());
+                                String isAvail =
+                                        availabilityData.getJSONObject("d").getString("IsAvail");
+                                switch (isAvail) {
+                                    case "true":
+                                        result.setStatus(SearchResult.Status.GREEN);
+                                        break;
+                                    case "false":
+                                        result.setStatus(SearchResult.Status.RED);
+                                        break;
+                                    case "digital":
+                                        result.setStatus(SearchResult.Status.UNKNOWN);
+                                        break;
+                                }
+                            } catch (JSONException e) {
+                                e.printStackTrace();
+                            }
+                        }
+                    });
                 } catch (JSONException | IOException e) {
                     e.printStackTrace();
                 }
@@ -392,21 +495,37 @@ public class Open extends BaseApi implements OpacApi {
             result.setNr(i);
             results.add(result);
         }
+
+        asyncWait();
         return new SearchRequestResult(results, totalCount, page);
     }
 
-    private String getCoverUrl(Element img) {
+    private List<String> getCoverUrlList(Element img) {
         String[] parts = img.attr("sources").split("\\|");
         // Example: SetSimpleCover|a|https://vlb.de/GetBlob.aspx?strIsbn=9783868511291&amp;
         // size=S|a|http://www.buchhandel.de/default.aspx?strframe=titelsuche&amp;
         // caller=vlbPublic&amp;func=DirectIsbnSearch&amp;isbn=9783868511291&amp;
         // nSiteId=11|c|SetNoCover|a|/DesktopModules/OCLC.OPEN.PL.DNN
         // .BaseLibrary/StyleSheets/Images/Fallbacks/emptyURL.gif?4.2.0.0|a|
-        String url = null;
-        if (parts.length >= 2 && parts[0].equals("SetSimpleCover")) {
-            url = parts[2].replace("&amp;", "&");
+        List<String> alternatives = new ArrayList<>();
+
+        for (int i = 0; i + 2 < parts.length; i++) {
+            if (parts[i].equals("SetSimpleCover")) {
+                String url = parts[i + 2].replace("&amp;", "&");
+                alternatives.add(url);
+            }
         }
-        return url;
+
+        if (img.hasAttr("devsources")) {
+            parts = img.attr("devsources").split("\\|");
+            for (int i = 0; i + 2 < parts.length; i++) {
+                if (parts[i].equals("SetSimpleCover")) {
+                    String url = parts[i + 2].replace("&amp;", "&");
+                    alternatives.add(url);
+                }
+            }
+        }
+        return alternatives;
     }
 
     private String numberToText(int number) {
@@ -431,64 +550,93 @@ public class Open extends BaseApi implements OpacApi {
     @Override
     public SearchRequestResult searchGetPage(int page)
             throws IOException, OpacErrorException, JSONException {
-        /*
-            When there are many pages of results, there will only be links to the next 4 and
-            previous 4 pages, so we will click links until it gets to the correct page.
-         */
 
         if (searchResultDoc == null) throw new NotReachableException();
 
         Document doc = searchResultDoc;
+        if (doc.select("span[id$=DataPager1]").size() == 0) {
+            /*
+                New style: Page buttons using normal links
+                We can go directly to the correct page
+            */
+            if (doc.select("a[id*=LinkButtonPageN]").size() > 0) {
+                String href = doc.select("a[id*=LinkButtonPageN][href*=page]").first().attr("href");
+                String url = href.replaceFirst("page=\\d+", "page=" + page);
+                Document doc2 = Jsoup.parse(httpGet(url, getDefaultEncoding()));
+                return parse_search(doc2, page);
+            } else {
+                int totalCount;
+                try {
+                    totalCount = Integer.parseInt(
+                            doc.select("span[id$=TotalItemsLabel]").first().text());
+                } catch (Exception e) {
+                    totalCount = 0;
+                }
 
-        Elements pageLinks =
-                doc.select("span[id$=DataPager1]").first().select("a[id*=LinkButtonPageN");
-        int from = Integer.valueOf(pageLinks.first().text());
-        int to = Integer.valueOf(pageLinks.last().text());
-        Element linkToClick;
-        boolean willBeCorrectPage;
-
-        if (page < from) {
-            linkToClick = pageLinks.first();
-            willBeCorrectPage = false;
-        } else if (page > to) {
-            linkToClick = pageLinks.last();
-            willBeCorrectPage = false;
+                // Next page does not exist
+                return new SearchRequestResult(
+                        new ArrayList<SearchResult>(),
+                        0,
+                        totalCount
+                );
+            }
         } else {
-            linkToClick = pageLinks.get(page - from);
-            willBeCorrectPage = true;
-        }
+            /*
+                Old style: Page buttons using Javascript
+                When there are many pages of results, there will only be links to the next 4 and
+                previous 4 pages, so we will click links until it gets to the correct page.
+            */
+            Elements pageLinks = doc.select("span[id$=DataPager1]").first()
+                                    .select("a[id*=LinkButtonPageN], span[id*=LabelPageN]");
+            int from = Integer.valueOf(pageLinks.first().text());
+            int to = Integer.valueOf(pageLinks.last().text());
+            Element linkToClick;
+            boolean willBeCorrectPage;
 
-        Pattern pattern = Pattern.compile("javascript:__doPostBack\\('([^,]*)','([^\\)]*)'\\)");
-        Matcher matcher = pattern.matcher(linkToClick.attr("href"));
-        if (!matcher.find()) throw new OpacErrorException(StringProvider.INTERNAL_ERROR);
+            if (page < from) {
+                linkToClick = pageLinks.first();
+                willBeCorrectPage = false;
+            } else if (page > to) {
+                linkToClick = pageLinks.last();
+                willBeCorrectPage = false;
+            } else {
+                linkToClick = pageLinks.get(page - from);
+                willBeCorrectPage = true;
+            }
 
-        FormElement form = (FormElement) doc.select("form").first();
-        HttpEntity data = formData(form, null)
-                .addTextBody("__EVENTTARGET", matcher.group(1))
-                .addTextBody("__EVENTARGUMENT", matcher.group(2))
-                .build();
+            if (linkToClick.tagName().equals("span")) {
+                // we are trying to get the page we are already on
+                return parse_search(searchResultDoc, page);
+            }
 
-        ByteArrayOutputStream stream = new ByteArrayOutputStream();
-        data.writeTo(stream);
+            Pattern pattern = Pattern.compile("javascript:__doPostBack\\('([^,]*)','([^\\)]*)'\\)");
+            Matcher matcher = pattern.matcher(linkToClick.attr("href"));
+            if (!matcher.find()) throw new OpacErrorException(StringProvider.INTERNAL_ERROR);
 
-        String postUrl = form.attr("abs:action");
+            FormElement form = (FormElement) doc.select("form").first();
+            MultipartBody data = formData(form, null).addFormDataPart("__EVENTTARGET", matcher.group(1))
+                                                     .addFormDataPart("__EVENTARGUMENT", matcher.group(2))
+                                                     .build();
 
-        String html = httpPost(postUrl, data, "UTF-8");
-        if (willBeCorrectPage) {
-            // We clicked on the correct link
-            Document doc2 = Jsoup.parse(html);
-            doc2.setBaseUri(postUrl);
-            return parse_search(doc2, page);
-        } else {
-            // There was no correct link, so try to find one again
-            searchResultDoc = Jsoup.parse(html);
-            searchResultDoc.setBaseUri(postUrl);
-            return searchGetPage(page);
+            String postUrl = form.attr("abs:action");
+
+            String html = httpPost(postUrl, data, "UTF-8");
+            if (willBeCorrectPage) {
+                // We clicked on the correct link
+                Document doc2 = Jsoup.parse(html);
+                doc2.setBaseUri(postUrl);
+                return parse_search(doc2, page);
+            } else {
+                // There was no correct link, so try to find one again
+                searchResultDoc = Jsoup.parse(html);
+                searchResultDoc.setBaseUri(postUrl);
+                return searchGetPage(page);
+            }
         }
     }
 
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException, OpacErrorException {
         try {
             String html =
@@ -496,16 +644,24 @@ public class Open extends BaseApi implements OpacApi {
                             NO_MOBILE + "&id=" + id, getDefaultEncoding());
             return parse_result(Jsoup.parse(html));
         } catch (JSONException e) {
-            throw new IOException(e);
+            throw new IOException(e.getMessage());
         }
     }
 
-    protected DetailledItem parse_result(Document doc) {
-        DetailledItem item = new DetailledItem();
+    protected DetailedItem parse_result(Document doc) {
+        DetailedItem item = new DetailedItem();
 
         // Title and Subtitle
         item.setTitle(doc.select("span[id$=LblShortDescriptionValue]").text());
         String subtitle = doc.select("span[id$=LblSubTitleValue]").text();
+        if (subtitle.equals("") && doc.select("span[id$=LblShortDescriptionValue]").size() > 0) {
+            // Subtitle detection for Bern
+            Element next = doc.select("span[id$=LblShortDescriptionValue]").first().parent()
+                              .nextElementSibling();
+            if (next.select("span").size() == 0) {
+                subtitle = next.text().trim();
+            }
+        }
         if (!subtitle.equals("")) {
             item.addDetail(new Detail(stringProvider.getString(StringProvider.SUBTITLE), subtitle));
         }
@@ -514,7 +670,7 @@ public class Open extends BaseApi implements OpacApi {
         if (doc.select("input[id$=mediumImage]").size() > 0) {
             item.setCover(doc.select("input[id$=mediumImage]").attr("src"));
         } else if (doc.select("img[id$=CoverView_Image]").size() > 0) {
-            item.setCover(getCoverUrl(doc.select("img[id$=CoverView_Image]").first()));
+            assignBestCover(item, getCoverUrlList(doc.select("img[id$=CoverView_Image]").first()));
         }
 
         // ID
@@ -526,62 +682,104 @@ public class Open extends BaseApi implements OpacApi {
             String value = doc.select("span[id$=ucCatalogueContent_LblAnnotation]").text();
             item.addDetail(new Detail(name, value));
         }
+
         // Details
-        for (Element detail : doc
-                .select("div[id$=CatalogueDetailView] .spacingBottomSmall:has(span+span)")) {
+        String DETAIL_SELECTOR =
+                "div[id$=CatalogueDetailView] .spacingBottomSmall:has(span+span)," +
+                        "div[id$=CatalogueDetailView] .spacingBottomSmall:has(span+a), " +
+                        "div[id$=CatalogueDetailView] .oclc-searchmodule-detail-data div:has" +
+                        "(span+span), " +
+                        "div[id$=CatalogueDetailView] .oclc-searchmodule-detail-data div:has" +
+                        "(span+a)";
+        for (Element detail : doc.select(DETAIL_SELECTOR)) {
             String name = detail.select("span").get(0).text().replace(": ", "");
-            String value = detail.select("span").get(1).text();
+            String value = "";
+            if (detail.select("a").size() > 1) {
+                int i = 0;
+                for (Element a : detail.select("a")) {
+                    if (i != 0) {
+                        value += ", ";
+                    }
+                    value += a.text().trim();
+                    i++;
+                }
+            } else {
+                value = detail.select("span, a").get(1).text();
+            }
+            item.addDetail(new Detail(name, value));
+        }
+
+        // Description
+        if (doc.select("div[id$=CatalogueContent]").size() > 0) {
+            String name = doc.select("div[id$=CatalogueContent] .oclc-module-header").text();
+            String value =
+                    doc.select("div[id$=CatalogueContent] .oclc-searchmodule-detail-annotation")
+                       .text();
             item.addDetail(new Detail(name, value));
         }
 
         // Copies
         Element table = doc.select("table[id$=grdViewMediumCopies]").first();
-        Elements trs = table.select("tr");
-        List<String> columnmap = new ArrayList<>();
-        for (Element th : trs.first().select("th")) {
-            columnmap.add(getCopyColumnKey(th.text()));
-        }
-
-        DateTimeFormatter fmt = DateTimeFormat.forPattern("dd.MM.yyyy").withLocale(Locale.GERMAN);
-        for (int i = 1; i < trs.size(); i++) {
-            Elements tds = trs.get(i).select("td");
-            Copy copy = new Copy();
-            for (int j = 0; j < tds.size(); j++) {
-                if (columnmap.get(j) == null) continue;
-                String text = tds.get(j).text().replace("\u00a0", "");
-                if (text.equals("")) continue;
-                copy.set(columnmap.get(j), text, fmt);
+        if (table != null) {
+            Elements trs = table.select("tr");
+            List<String> columnmap = new ArrayList<>();
+            for (Element th : trs.first().select("th")) {
+                columnmap.add(getCopyColumnKey(th.text()));
             }
-            item.addCopy(copy);
+
+            DateTimeFormatter fmt =
+                    DateTimeFormat.forPattern("dd.MM.yyyy").withLocale(Locale.GERMAN);
+            for (int i = 1; i < trs.size(); i++) {
+                Elements tds = trs.get(i).select("td");
+                Copy copy = new Copy();
+                for (int j = 0; j < tds.size(); j++) {
+                    if (columnmap.get(j) == null) continue;
+                    String text = tds.get(j).text().replace("\u00a0", "");
+                    if (tds.get(j).select(".oclc-module-label").size() > 0 &&
+                            tds.get(j).select("span").size() == 2) {
+                        text = tds.get(j).select("span").get(1).text();
+                    }
+
+                    if (text.equals("")) continue;
+                    copy.set(columnmap.get(j), text, fmt);
+                }
+                item.addCopy(copy);
+            }
         }
 
+        asyncWait();
         return item;
     }
 
-    private String getCopyColumnKey(String text) {
+    protected String getCopyColumnKey(String text) {
         switch (text) {
             case "Zweigstelle":
+            case "Bibliothek":
                 return "branch";
             case "Standorte":
+            case "Standort":
                 return "location";
             case "Status":
                 return "status";
             case "Vorbestellungen":
                 return "reservations";
             case "Frist":
+            case "Rückgabedatum":
                 return "returndate";
+            case "Signatur":
+                return "signature";
             default:
                 return null;
         }
     }
 
     @Override
-    public DetailledItem getResult(int position) throws IOException, OpacErrorException {
+    public DetailedItem getResult(int position) throws IOException, OpacErrorException {
         return null;
     }
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account account,
+    public ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException {
         return null;
     }
@@ -617,14 +815,19 @@ public class Open extends BaseApi implements OpacApi {
     }
 
     @Override
-    public List<SearchField> getSearchFields()
+    public List<SearchField> parseSearchFields()
             throws IOException, OpacErrorException, JSONException {
         String url =
                 opac_url + "/" + data.getJSONObject("urls").getString("advanced_search") +
                         NO_MOBILE;
         Document doc = Jsoup.parse(httpGet(url, getDefaultEncoding()));
 
-        Element table = doc.select(".ModOPENExtendedSearchModuleC table").first();
+        if (doc.select("[id$=LblErrorMsg]").size() > 0 &&
+                doc.select("[id$=ContentPane] input").size() == 0) {
+            throw new OpacErrorException(doc.select("[id$=LblErrorMsg]").text());
+        }
+
+        Element module = doc.select(".ModOPENExtendedSearchModuleC").first();
 
         List<SearchField> fields = new ArrayList<>();
 
@@ -635,7 +838,7 @@ public class Open extends BaseApi implements OpacApi {
         notSelectable.put("selectable", false);
 
         // Selectable search criteria
-        Elements options = table.select("select[id$=FirstSearchField] option");
+        Elements options = module.select("select[id$=FirstSearchField] option");
         for (Element option : options) {
             TextSearchField field = new TextSearchField();
             field.setId(option.val());
@@ -645,8 +848,13 @@ public class Open extends BaseApi implements OpacApi {
         }
 
         // More criteria
-        Element moreHeader =
-                table.select("span[id$=LblMoreCriterias]").parents().select("tr").first();
+        Element moreHeader = null;
+        if (module.select("table").size() == 1) {
+            moreHeader = module.select("span[id$=LblMoreCriterias]").parents().select("tr").first();
+        } else {
+            // Newer OPEN, e.g. Erlangen
+            moreHeader = module.select("span[id$=LblMoreCriterias]").first();
+        }
         if (moreHeader != null) {
             Elements siblings = moreHeader.siblingElements();
             int startIndex = moreHeader.elementSiblingIndex();
@@ -737,6 +945,48 @@ public class Open extends BaseApi implements OpacApi {
         return "UTF-8";
     }
 
+    static StringBuilder appendQuotedString(StringBuilder target, String key) {
+        target.append('"');
+        for (int i = 0, len = key.length(); i < len; i++) {
+            char ch = key.charAt(i);
+            switch (ch) {
+                case '\n':
+                    target.append("%0A");
+                    break;
+                case '\r':
+                    target.append("%0D");
+                    break;
+                case '"':
+                    target.append("%22");
+                    break;
+                default:
+                    target.append(ch);
+                    break;
+            }
+        }
+        target.append('"');
+        return target;
+    }
+
+    public static MultipartBody.Part createFormData(String name, String value) {
+        return createFormData(name, null, RequestBody.create(null, value.getBytes()));
+    }
+
+    public static MultipartBody.Part createFormData(String name, String filename, RequestBody body) {
+        if (name == null) {
+            throw new NullPointerException("name == null");
+        }
+        StringBuilder disposition = new StringBuilder("form-data; name=");
+        appendQuotedString(disposition, name);
+
+        if (filename != null) {
+            disposition.append("; filename=");
+            appendQuotedString(disposition, filename);
+        }
+
+        return create(Headers.of("Content-Disposition", disposition.toString()), body);
+    }
+
     /**
      * Better version of JSoup's implementation of this function ({@link
      * org.jsoup.nodes.FormElement#formData()}).
@@ -746,9 +996,14 @@ public class Open extends BaseApi implements OpacApi {
      *                   null
      * @return A MultipartEntityBuilder containing the data of the form
      */
-    public MultipartEntityBuilder formData(FormElement form, String submitName) {
-        MultipartEntityBuilder data = MultipartEntityBuilder.create();
-        data.setLaxMode();
+    protected MultipartBody.Builder formData(FormElement form, String submitName) {
+        MultipartBody.Builder data = new MultipartBody.Builder();
+        data.setType(MediaType.parse("multipart/form-data; charset=utf-8"));
+
+        // data.setCharset somehow breaks everything in Bern.
+        // data.addTextBody breaks utf-8 characters in select boxes in Bern
+        // .getBytes is an implicit, undeclared UTF-8 conversion, this seems to work -- at least
+        // in Bern
 
         // iterate the form control elements and accumulate their values
         for (Element el : form.elements()) {
@@ -763,26 +1018,27 @@ public class Open extends BaseApi implements OpacApi {
                 Elements options = el.select("option[selected]");
                 boolean set = false;
                 for (Element option : options) {
-                    data.addTextBody(name, option.val());
+                    data.addPart(createFormData(name, option.val()));
                     set = true;
                 }
                 if (!set) {
                     Element option = el.select("option").first();
                     if (option != null) {
-                        data.addTextBody(name, option.val());
+                        data.addPart(createFormData(name, option.val()));
                     }
                 }
             } else if ("checkbox".equalsIgnoreCase(type) || "radio".equalsIgnoreCase(type)) {
                 // only add checkbox or radio if they have the checked attribute
                 if (el.hasAttr("checked")) {
-                    data.addTextBody(name, el.val().length() > 0 ? el.val() : "on");
+                    data.addFormDataPart(name, el.val().length() > 0 ? el.val() : "on");
                 }
-            } else if ("submit".equalsIgnoreCase(type) || "image".equalsIgnoreCase(type)) {
+            } else if ("submit".equalsIgnoreCase(type) || "image".equalsIgnoreCase(type) ||
+                    "button".equalsIgnoreCase(type)) {
                 if (submitName != null && el.attr("name").contains(submitName)) {
-                    data.addTextBody(name, el.val());
+                    data.addPart(createFormData(name, el.val()));
                 }
             } else {
-                data.addTextBody(name, el.val());
+                data.addPart(createFormData(name, el.val()));
             }
         }
         return data;

@@ -31,9 +31,10 @@
     <string name="no_warranty">All information is supplied without liability.</string>
     <string name="lent_head">Lent</string>
     <string name="reservations_head">Reservations</string>
-    <string name="entl_none">Nothing lent</string>
+    <string name="lent_none">Nothing lent</string>
     <string name="reservations_none">Nothing reserved</string>
-    <string name="cancel_confirm">Really cancel reservation?</string>
+    <string name="cancel_confirm">Do you really want to cancel this reservation?</string>
+    <string name="prolong_confirm">Do you really want to renew this item?</string>
     <string name="yes">Yes</string>
     <string name="no">No</string>
     <string name="cancel">Cancel</string>
@@ -43,6 +44,7 @@
     <string name="doing_prolong">Performing renewal…</string>
     <string name="doing_download">Download information is being retrieved…</string>
     <string name="reader_needed">To read the e-book, you need a separate app, for example \'Bluefire Reader\'. Click \'Ignore\' if you already have such an app, this message won\'t show up again in this case. Click \'Download\' to open up the Play Store to download Bluefire Reader.</string>
+    <string name="reader_needed_overdrive">To open this medium, you need a separate app, for example OverDrive\'s own app. Click \'Ignore\' if you already have such an app, this message won\'t show up again in this case. Click \'Download\' to open up the Play Store to download the OverDrive app.</string>
     <string name="reader_needed_ignore">Ignore</string>
     <string name="doing_prolong_all">All renewable media is being renewed…</string>
     <string name="prolong_all_confirm">Really renew all items in your account? In some libraries this might cause fees.</string>
@@ -82,9 +84,9 @@
     </string-array>
     <string name="notification_warning">Warning period</string>
     <string name="notification_warning_desc">How long before the due date should a notification be shown?</string>
-    <string name="notif_ticker">%s items are about to expire!</string>
+    <string name="notif_ticker">%d items are about to expire!</string>
     <string name="notif_title">Items are about to expire</string>
-    <string name="notif_ticker_expired">%s items have expired!</string>
+    <string name="notif_ticker_expired">%d items have expired!</string>
     <string name="notif_title_expired">Items have expired</string>
     <string name="notif_plus_more">+%d more</string>
     <string name="notif_snooze">Later</string>
@@ -94,12 +96,13 @@
     <string name="star">Save to favorites</string>
     <string name="starred">The item is now on your favorites list.</string>
     <string name="star_wait">Please wait for the details to load.</string>
+    <string name="star_unsupported">We could not obtain enough information about this item to add it to your list.</string>
     <string name="starred_welcome">This is your favorites list. You can add items by clicking the star on a detail page. The list is saved separately for every library you use.</string>
     <string name="share">Share</string>
     <string name="share_wait">Please wait for the details to load.</string>
     <string name="share_notsupported">Not supported in this library.</string>
     <string name="unsupported">Not supported</string>
-    <string name="account_unsupported_api">This feature is not yet supported in your library. We might use some help from readers here to implement it. If you\'re interested, mail us at info@opacapp.de</string>
+    <string name="account_unsupported_api">This feature is not yet supported in your library. Sorry :(</string>
     <string name="write_mail">Write e-mail</string>
     <string name="info_error">Could not load additional information for this library.</string>
     <string name="info_unsupported">We don\'t have any information about this library to show.</string>
@@ -114,8 +117,8 @@
     <string name="accounts_edit">Change account</string>
     <string name="accounts_desc">Manage your libraries and membership numbers</string>
     <string name="account_label">Label</string>
-    <string name="account_nr">Membership ID/user name (optional)</string>
-    <string name="account_password">Password (optional)</string>
+    <string name="account_nr">Membership ID/user name</string>
+    <string name="account_password">Password</string>
     <string name="account_city">Library</string>
     <string name="account_delete_confirm">Really delete account?</string>
     <string name="account_select">Select Account</string>
@@ -163,6 +166,7 @@
         <item quantity="other">%d search results</item>
     </plurals>
     <string name="export_starred">Export</string>
+    <string name="export_account">Share as text</string>
     <string name="geolocate">Find nearby libraries</string>
     <string name="geolocate_progress">Locating you…</string>
     <string name="geolocate_not_available">Location is not available on this device. You might need to enable it in the settings.</string>
@@ -203,7 +207,7 @@
     <string name="prolong">Renew</string>
     <string name="reservation_cancel">Cancel reservation</string>
     <string name="reservation_book">Lend</string>
-    <string name="mediatype">Material type</string>
+    <string name="mediatype">Media type</string>
     <string name="status">Status</string>
     <string name="free_search">Free Search</string>
     <string name="no_fields_found">No search fields found</string>
@@ -214,6 +218,7 @@
     <string name="support_search">Search only</string>
     <string name="meta_clear_title">Clear cache</string>
     <string name="meta_clear">Deletes cached metadata</string>
+    <string name="meta_run_check">Run sync service</string>
     <string name="version">Version</string>
     <string name="website">Website</string>
     <string name="website_url">www.opacapp.net</string>
@@ -223,13 +228,15 @@
     <string name="other">Other</string>
     <string name="source">Source Code</string>
     <string name="loading">Loading…</string>
-    <string name="loading_libraries">Loading library list…</string>
+    <string name="loading_libraries">Processing library data…</string>
+    <string name="updating_libraries">Loading updated library list…</string>
     <string name="shelfmark">Shelfmark</string>
     <string name="url">URL</string>
     <string name="return_date">Return date</string>
     <string name="location">Location</string>
     <string name="department">Department</string>
     <string name="reservations">Reservations</string>
+    <string name="barcode">Barcode</string>
     <string name="clear_search">clear form</string>
     <string name="title">Title</string>
     <string name="author">Author</string>
@@ -254,7 +261,54 @@
     <string name="reservation_fee_warning">Please note that, depending on your library\'s rules,
         fees might apply for reservations. If in doubt, please check your library\'s scale of
         fees.</string>
+    <string name="prolong_fee_warning">Please note that, depending on your library\'s rules,
+        fees might apply for prolonging an item. If in doubt, please check your library\'s scale of
+        fees.</string>
     <string name="do_not_ask_again">Do not show again</string>
     <string name="reservation_fee_continue">Continue</string>
     <string name="notification_repeat">Repeat notifications</string>
+    <string name="update_info_title">Happy Birthday Opac App!</string>
+    <string name="update_info_text">This May, our app turned five years old. We\'re celebrating the birthday with a new logo and want to thank all of you for all the feedback that we received.</string>
+    <string name="update_info_text_second">If you want to help us keep the app sustainable in the future, talk to your library: By buying the Plus Edition of the app, they allows us to continue developing this app and at the same time unlocks a set of useful features for you. Check our website www.opacapp.net for more details!</string>
+    <string name="accountdata_export_header">Account data of %1$s at %2$s</string>
+    <string name="accountdata_title">Title</string>
+    <string name="accountdata_author">Author</string>
+    <string name="accountdata_format">Media type</string>
+    <string name="accountdata_status">Status</string>
+    <string name="accountdata_lent_barcode">Barcode</string>
+    <string name="accountdata_lent_deadline">Return date</string>
+    <string name="accountdata_lent_home_branch">Home Branch</string>
+    <string name="accountdata_lent_lending_branch">Lending Branch</string>
+    <string name="accountdata_reserved_ready_date">Ready date</string>
+    <string name="accountdata_reserved_expiration_date">Expiration date</string>
+    <string name="accountdata_reserved_branch">Branch</string>
+    <string name="toggle_notice">Tap the arrow above to switch between multiple accounts.</string>
+    <string name="toggle_notice_button">Got it</string>
+    <string name="starred_removed">Removed from favorites</string>
+    <string name="starred_removed_undo">Undo</string>
+    <string name="print">Print</string>
+    <string name="print_wait">Please wait for details to load</string>
+    <string name="preference_category_library_config">Library data</string>
+    <string name="preference_update_library_config">Update library data</string>
+    <string name="preference_reset_library_config">Reset library data</string>
+    <string name="preference_reset_library_config_desc">to state from last app update</string>
+    <string name="updating_library_config">Updating library data</string>
+    <string name="library_config_no_updates">No updated library data found.</string>
+    <string name="library_config_update_success">Updated data for %d libraries.</string>
+    <string name="library_config_update_failure">Could not update library data.</string>
+    <string name="library_config_last_update">Last updated %s</string>
+    <string name="library_config_last_update_never">No data downloaded yet</string>
+    <string name="library_config_reset">Restored library data from last app update.</string>
+    <string name="library_removed_error">Unfortunately, the library you are using was removed from the app. The reason for this could be that the library switched to a new software system that the app is not compatible with or that the library contacted us and explicitly stated that they want to be removed from the app. You can contact us at info@opacapp.net to find out more.</string>
+    <string name="account_anonymous">anonymous (search only)</string>
+    <string name="account_with_credentials">with credentials (search and account)</string>
+    <string name="please_enter_password">Please enter your password.</string>
+    <string name="please_enter_username">Please enter your membership ID.</string>
+    <string name="intro_title_0">Welcome to Web Opac App!</string>
+    <string name="intro_description_0">Swipe left for more information.</string>
+    <string name="intro_title_1">Notifications</string>
+    <string name="intro_description_1">You can enable notifications in the app settings to receive a reminder when your lent books are due.</string>
+    <string name="intro_title_2">1000+ libraries</string>
+    <string name="intro_description_2">This app supports more than 1,000 libraries from all around the world. Select yours or suggest it if it\'s not yet on the list!</string>
+    <string name="no_title">(no title)</string>
 </resources>

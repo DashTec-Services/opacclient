@@ -18,14 +18,6 @@
  */
 package de.geeksfactory.opacclient;
 
-import com.commonsware.cwac.wakeful.WakefulIntentService;
-
-import org.acra.ACRA;
-import org.acra.ACRAConfiguration;
-import org.acra.annotation.ReportsCrashes;
-import org.json.JSONException;
-import org.json.JSONObject;
-
 import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
@@ -38,25 +30,39 @@ import android.net.NetworkInfo;
 import android.net.Uri;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
+import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.util.Log;
 
-import java.io.BufferedReader;
+import com.commonsware.cwac.wakeful.WakefulIntentService;
+
+import org.acra.ACRA;
+import org.acra.ACRAConfiguration;
+import org.acra.annotation.ReportsCrashes;
+import org.joda.time.DateTime;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
 
 import de.geeksfactory.opacclient.apis.OpacApi;
 import de.geeksfactory.opacclient.frontend.AccountListActivity;
+import de.geeksfactory.opacclient.frontend.LibraryListActivity;
 import de.geeksfactory.opacclient.frontend.MainActivity;
 import de.geeksfactory.opacclient.frontend.MainPreferenceActivity;
 import de.geeksfactory.opacclient.frontend.SearchResultListActivity;
-import de.geeksfactory.opacclient.frontend.WelcomeActivity;
 import de.geeksfactory.opacclient.i18n.AndroidStringProvider;
 import de.geeksfactory.opacclient.networking.AndroidHttpClientFactory;
 import de.geeksfactory.opacclient.objects.Account;
@@ -65,8 +71,14 @@ import de.geeksfactory.opacclient.reminder.SyncAccountAlarmListener;
 import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 import de.geeksfactory.opacclient.storage.AccountDataSource;
+import de.geeksfactory.opacclient.storage.PreferenceDataSource;
 import de.geeksfactory.opacclient.storage.StarContentProvider;
+import de.geeksfactory.opacclient.utils.DebugTools;
 import de.geeksfactory.opacclient.utils.ErrorReporter;
+import de.geeksfactory.opacclient.utils.Utils;
+import de.geeksfactory.opacclient.webservice.LibraryConfigUpdateService;
+import de.geeksfactory.opacclient.webservice.UpdateHandler;
+import de.geeksfactory.opacclient.webservice.WebserviceReportHandler;
 
 @ReportsCrashes(mailTo = "info@opacapp.de",
         mode = org.acra.ReportingInteractionMode.NOTIFICATION,
@@ -162,7 +174,8 @@ public class OpacClient extends Application {
     }
 
     public void addFirstAccount(Activity activity) {
-        Intent intent = new Intent(activity, WelcomeActivity.class);
+        Intent intent = new Intent(activity, LibraryListActivity.class);
+        intent.putExtra(LibraryListActivity.EXTRA_WELCOME, true);
         activity.startActivity(intent);
         activity.finish();
     }
@@ -190,14 +203,15 @@ public class OpacClient extends Application {
         return (networkInfo != null && networkInfo.isConnected());
     }
 
-    public OpacApi getNewApi(Library lib) {
+    public OpacApi getNewApi(Library lib) throws LibraryRemovedException {
+        if (!lib.isActive()) throw new LibraryRemovedException();
         currentLang = getResources().getConfiguration().locale.getLanguage();
         return OpacApiFactory
                 .create(lib, new AndroidStringProvider(), new AndroidHttpClientFactory(),
-                        currentLang);
+                        currentLang, new WebserviceReportHandler());
     }
 
-    private OpacApi initApi(Library lib) {
+    private OpacApi initApi(Library lib) throws LibraryRemovedException {
         api = getNewApi(lib);
         return api;
     }
@@ -208,7 +222,7 @@ public class OpacClient extends Application {
         library = null;
     }
 
-    public OpacApi getApi() {
+    public OpacApi getApi() throws LibraryRemovedException {
         if (account != null && api != null) {
             if (sp.getLong(PREF_SELECTED_ACCOUNT, 0) == account.getId()
                     && getResources().getConfiguration().locale.getLanguage()
@@ -227,9 +241,7 @@ public class OpacClient extends Application {
             }
         }
         AccountDataSource data = new AccountDataSource(this);
-        data.open();
         account = data.getAccount(sp.getLong(PREF_SELECTED_ACCOUNT, 0));
-        data.close();
         return account;
     }
 
@@ -243,21 +255,48 @@ public class OpacClient extends Application {
     }
 
     public Library getLibrary(String ident) throws IOException, JSONException {
-        String line;
+        String filename = ident + ".json";
+        String json;
 
-        StringBuilder builder = new StringBuilder();
-        InputStream fis = getAssets().open(
-                ASSETS_BIBSDIR + "/" + ident + ".json");
+        File filesDir = getLibrariesDir();
+        PreferenceDataSource prefs = getPreferenceDataSource();
 
-        BufferedReader reader = new BufferedReader(new InputStreamReader(fis,
-                "utf-8"));
-        while ((line = reader.readLine()) != null) {
-            builder.append(line);
+        if (fileExists(filesDir, filename) && (
+                !prefs.hasBundledConfiguration() ||
+                        prefs.getLastLibraryConfigUpdateVersion() == BuildConfig.VERSION_CODE)) {
+            // only use files if they were downloaded using the current app version
+            json = Utils.readStreamToString(openFile(filesDir, filename));
+        } else {
+            json = Utils.readStreamToString(getAssets().open(ASSETS_BIBSDIR + "/" + filename));
         }
-
-        fis.close();
-        String json = builder.toString();
         return Library.fromJSON(ident, new JSONObject(json));
+    }
+
+    @NonNull
+    PreferenceDataSource getPreferenceDataSource() {
+        return new PreferenceDataSource(this);
+    }
+
+    InputStream openFile(File filesDir, String filename) throws FileNotFoundException {
+        File file = new File(filesDir, filename);
+        return new FileInputStream(file);
+    }
+
+    boolean fileExists(File filesDir, String filename) {
+        File file = new File(filesDir, filename);
+        return file.exists();
+    }
+
+    @NonNull
+    protected File getFile(File filesDir, String filename) {
+        return new File(filesDir, filename);
+    }
+
+    @NonNull
+    protected File getLibrariesDir() {
+        File filesDir = new File(getFilesDir(), LibraryConfigUpdateService.LIBRARIES_DIR);
+        filesDir.mkdirs();
+        return filesDir;
     }
 
     public Library getLibrary() {
@@ -288,40 +327,31 @@ public class OpacClient extends Application {
             throws IOException {
         AssetManager assets = getAssets();
         String[] files = assets.list(ASSETS_BIBSDIR);
-        int num = files.length;
+        String[] additionalFiles = getLibrariesDir().list();
+        Set<String> allFiles = new HashSet<>();
+        Collections.addAll(allFiles, files);
+        Collections.addAll(allFiles, additionalFiles);
+        int num = allFiles.size();
 
         List<Library> libs = new ArrayList<>();
 
-        StringBuilder builder;
-        BufferedReader reader;
-        InputStream fis;
-        String line;
-        String json;
-
-        for (int i = 0; i < num; i++) {
-            builder = new StringBuilder();
-            fis = assets.open(ASSETS_BIBSDIR + "/" + files[i]);
-
-            reader = new BufferedReader(new InputStreamReader(fis, "utf-8"));
-            while ((line = reader.readLine()) != null) {
-                builder.append(line);
-            }
-
-            fis.close();
-            json = builder.toString();
+        int i = 0;
+        for (String file : allFiles) {
             try {
-                Library lib = Library.fromJSON(files[i].replace(".json", ""),
-                        new JSONObject(json));
-                if (!lib.getApi().equals("test") || BuildConfig.DEBUG) libs.add(lib);
+                Library lib =
+                        getLibrary(file.substring(0, file.length() - ".json".length()));
+                if ((!lib.getApi().equals("test") || BuildConfig.DEBUG) && lib.isActive()) {
+                    libs.add(lib);
+                }
             } catch (JSONException e) {
-                Log.w("JSON library files", "Failed parsing library "
-                        + files[i]);
+                Log.w("JSON library files", "Failed parsing library " + file);
                 e.printStackTrace();
             }
-            if (callback != null && i % 100 == 0 && i > 0) {
-                // reporting progress for every 100 loaded files should be enough
+            if (callback != null && i % 10 == 0 && i > 0) {
+                // reporting progress for every 10 loaded files should be enough
                 callback.publishProgress(((double) i) / num);
             }
+            i++;
         }
 
         return libs;
@@ -353,7 +383,12 @@ public class OpacClient extends Application {
                 ACRA.getErrorReporter().putCustomData("library",
                         getLibrary().getIdent());
             }
+            DateTime lastUpdate = new PreferenceDataSource(getApplicationContext())
+                    .getLastLibraryConfigUpdate();
+            ACRA.getErrorReporter().putCustomData("data_version",
+                    lastUpdate != null ? lastUpdate.toString() : "null");
         }
+        DebugTools.init(this);
 
         OpacClient.context = getApplicationContext();
 
@@ -385,4 +420,14 @@ public class OpacClient extends Application {
         public void publishProgress(double progress);
     }
 
+    public static class LibraryRemovedException extends Exception {
+    }
+
+    public UpdateHandler getUpdateHandler() {
+        return new UpdateHandler();
+    }
+
+    public boolean promotePlusApps() {
+        return true;
+    }
 }

@@ -1,7 +1,5 @@
 package de.geeksfactory.opacclient.frontend;
 
-import org.joda.time.DateTime;
-
 import android.app.Activity;
 import android.app.DatePickerDialog;
 import android.app.NotificationManager;
@@ -13,12 +11,15 @@ import android.text.format.DateFormat;
 import android.widget.DatePicker;
 import android.widget.TimePicker;
 
+import org.joda.time.DateTime;
+
 import de.geeksfactory.opacclient.OpacClient;
 import de.geeksfactory.opacclient.R;
 import de.geeksfactory.opacclient.reminder.Alarm;
 import de.geeksfactory.opacclient.reminder.ReminderBroadcastReceiver;
 import de.geeksfactory.opacclient.reminder.ReminderHelper;
 import de.geeksfactory.opacclient.storage.AccountDataSource;
+import de.geeksfactory.opacclient.storage.DataIntegrityException;
 
 public class SnoozeDatePickerActivity extends Activity
         implements DatePickerDialog.OnDateSetListener, TimePickerDialog.OnTimeSetListener {
@@ -52,12 +53,14 @@ public class SnoozeDatePickerActivity extends Activity
 
         long alarmId = getIntent().getLongExtra(ReminderBroadcastReceiver.EXTRA_ALARM_ID, -1);
         AccountDataSource adata = new AccountDataSource(this);
-        adata.open();
         Alarm alarm = adata.getAlarm(alarmId);
+        if (alarm == null) {
+            throw new DataIntegrityException("Trying to snooze unknown alarm ID " + alarmId);
+        }
+
         alarm.notified = false;
         alarm.notificationTime = dt;
         adata.updateAlarm(alarm);
-        adata.close();
 
         // dismiss notification
         NotificationManager manager = (NotificationManager) getSystemService(

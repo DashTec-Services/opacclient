@@ -28,11 +28,12 @@ import java.util.regex.Pattern;
 
 import de.geeksfactory.opacclient.i18n.StringProvider;
 import de.geeksfactory.opacclient.networking.HttpClientFactory;
+import de.geeksfactory.opacclient.networking.NotReachableException;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Library;
 import de.geeksfactory.opacclient.objects.SearchRequestResult;
@@ -44,7 +45,7 @@ import de.geeksfactory.opacclient.searchfields.TextSearchField;
 
 import static java.net.URLDecoder.decode;
 
-public class Primo extends BaseApi {
+public class Primo extends ApacheBaseApi {
     protected static HashMap<String, String> languageCodes = new HashMap<>();
     protected static HashMap<String, SearchResult.MediaType> mediaTypeClasses = new HashMap<>();
 
@@ -102,10 +103,12 @@ public class Primo extends BaseApi {
         List<NameValuePair> params = new ArrayList<>();
 
         String tab = "";
-        if (data.has("searchtab"))
+        if (data.has("searchtab")) {
             tab = "&tab=" + data.optString("searchtab", "default_tab");
+        }
         String html =
-                httpGet(opac_url + "/action/search.do?mode=Advanced&ct=AdvancedSearch&vid=" + vid + tab,
+                httpGet(opac_url + "/action/search.do?mode=Advanced&ct=AdvancedSearch&vid=" + vid +
+                                tab,
                         getDefaultEncoding());
         Document doc = Jsoup.parse(html);
 
@@ -173,8 +176,9 @@ public class Primo extends BaseApi {
         if (doc.select(".EXLResultsNumbers").size() > 0) {
             try {
                 resnum = Integer.valueOf(
-                        doc.select(".EXLResultsNumbers em").first().text().trim().replace(".", "")
-                           .replace(",", "").replace(" ", ""));
+                        doc.select(".EXLResultsNumbers em, .PaginationLabel strong").first().text()
+                           .trim().replace(".", "")
+                           .replace(",", "").replace(" ", "").replace("Ergebnisse", ""));
             } catch (NumberFormatException e) {
                 e.printStackTrace();
             }
@@ -200,6 +204,8 @@ public class Primo extends BaseApi {
                 res.setStatus(SearchResult.Status.GREEN);
             } else if (resrow.select(".EXLResultStatusNotAvailable").size() > 0) {
                 res.setStatus(SearchResult.Status.RED);
+            } else if (resrow.select(".EXLResultStatusMaybeAvailable").size() > 0) {
+                res.setStatus(SearchResult.Status.YELLOW);
             }
             res.setPage(page);
 
@@ -297,7 +303,7 @@ public class Primo extends BaseApi {
     }
 
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException, OpacErrorException {
         if (!initialised) start();
         String html =
@@ -308,9 +314,9 @@ public class Primo extends BaseApi {
         return parse_detail(id, doc);
     }
 
-    protected DetailledItem parse_detail(String id, Document doc)
+    protected DetailedItem parse_detail(String id, Document doc)
             throws OpacErrorException, IOException {
-        DetailledItem res = new DetailledItem();
+        DetailedItem res = new DetailedItem();
         res.setId(id);
 
         res.setTitle(doc.select(".EXLResultTitle").text());
@@ -366,6 +372,8 @@ public class Primo extends BaseApi {
 
             DateTimeFormatter fmt =
                     DateTimeFormat.forPattern("dd.MM.yyyy").withLocale(Locale.GERMAN);
+            DateTimeFormatter fmt2 =
+                    DateTimeFormat.forPattern("dd/MM/yyyy").withLocale(Locale.GERMAN);
 
             for (Element tr : doc2
                     .select(".EXLLocationTable tr:not(.EXLLocationTitlesRow):not(" +
@@ -373,8 +381,17 @@ public class Primo extends BaseApi {
                 int j = 0;
                 Copy copy = new Copy();
                 for (Element td : tr.children()) {
-                    if (copymap.containsKey(j)) {
-                        copy.set(copymap.get(j), td.text().trim(), fmt);
+                    String value = td.text().replace("\u00a0", " ").trim();
+                    if (copymap.containsKey(j) && !value.equals("")) {
+                        try {
+                            copy.set(copymap.get(j), value, fmt);
+                        } catch (IllegalArgumentException e) {
+                            try {
+                                copy.set(copymap.get(j), value, fmt2);
+                            } catch (IllegalArgumentException e2) {
+                                e2.printStackTrace();
+                            }
+                        }
                     }
                     j++;
                 }
@@ -404,7 +421,7 @@ public class Primo extends BaseApi {
     }
 
     @Override
-    public DetailledItem getResult(int position) throws IOException, OpacErrorException {
+    public DetailedItem getResult(int position) throws IOException, OpacErrorException {
         return null;
     }
 
@@ -416,7 +433,7 @@ public class Primo extends BaseApi {
     }
 
     @Override
-    public List<SearchField> getSearchFields()
+    public List<SearchField> parseSearchFields()
             throws IOException, OpacErrorException, JSONException {
         start();
         String html =
@@ -426,6 +443,9 @@ public class Primo extends BaseApi {
 
         List<SearchField> fields = new ArrayList<>();
 
+        if (doc.select("select#exlidInput_scope_1").size() < 1) {
+            throw new NotReachableException();
+        }
         Elements options = doc.select("select#exlidInput_scope_1").first().select("option");
         for (Element option : options) {
             TextSearchField field = new TextSearchField();
@@ -551,7 +571,7 @@ public class Primo extends BaseApi {
     }
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account account,
+    public ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException {
         return null;
     }

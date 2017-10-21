@@ -16,9 +16,10 @@ import de.geeksfactory.opacclient.objects.ReservedItem;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 @RunWith(Parameterized.class)
-public class WinBiapAccountTest extends BaseAccountTest {
+public class WinBiapAccountTest extends BaseHtmlTest {
     private String file;
 
     public WinBiapAccountTest(String file) {
@@ -26,7 +27,8 @@ public class WinBiapAccountTest extends BaseAccountTest {
     }
 
     private static final String[] FILES =
-            new String[]{"guetersloh.html", "geltendorf.html", "neufahrn.html", "memmingen.html"};
+            new String[]{"guetersloh.html", "geltendorf.html", "neufahrn.html", "memmingen.html",
+                    "immenstadt.html", "leichlingen.html"};
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<String[]> files() {
@@ -41,11 +43,13 @@ public class WinBiapAccountTest extends BaseAccountTest {
     public void testParseMediaList() throws OpacApi.OpacErrorException {
         String html = readResource("/winbiap/medialist/" + file);
         if (html == null) return; // we may not have all files for all libraries
-        List<LentItem> media = WinBiap.parseMediaList(Jsoup.parse(html));
+        List<LentItem> media = WinBiap.parseMediaList(Jsoup.parse(html), new JSONObject());
         assertTrue(media.size() > 0);
         for (LentItem item : media) {
             assertNotNull(item.getTitle());
             assertNotNull(item.getDeadline());
+            assertNotNull(item.getMediaType());
+            assertContainsData(item.getCover());
         }
     }
 
@@ -56,6 +60,23 @@ public class WinBiapAccountTest extends BaseAccountTest {
         List<ReservedItem> media =
                 WinBiap.parseResList(Jsoup.parse(html), new DummyStringProvider(),
                         new JSONObject());
+        for (ReservedItem item : media) {
+            assertNotNull(item.getMediaType());
+            assertContainsData(item.getCover());
+        }
         assertTrue(media.size() > 0);
+    }
+
+    @Test
+    public void testLogin() throws OpacApi.OpacErrorException {
+        String html = readResource("/winbiap/login/" + file);
+        if (html == null) return; // we may not have all files for all libraries
+
+        try {
+            WinBiap.handleLoginErrors(Jsoup.parse(html));
+            fail("Login succeeded even though the password was wrong");
+        } catch (OpacApi.OpacErrorException e) {
+            assertTrue(e.getMessage().startsWith("Leider stimmen Ihre Anmeldedaten nicht."));
+        }
     }
 }

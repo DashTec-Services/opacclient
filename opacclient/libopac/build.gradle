@@ -1,4 +1,5 @@
 apply plugin: 'java'
+apply plugin: 'jacoco'
 
 sourceCompatibility = JavaVersion.VERSION_1_7
 targetCompatibility = JavaVersion.VERSION_1_7
@@ -11,12 +12,24 @@ dependencies {
     compile 'org.jsoup:jsoup:1.8.3'
     compile 'org.apache.httpcomponents:httpmime:4.3.6'
     compile 'joda-time:joda-time:2.8.2'
+    compile 'com.squareup.okhttp3:okhttp:3.9.0'
+    compile "com.squareup.okhttp3:okhttp-urlconnection:3.9.0"
     testCompile "junit:junit:4.12"
+    testCompile 'org.hamcrest:hamcrest-library:1.3'
+    testCompile 'org.mockito:mockito-core:1.10.19'
 }
 task copyTestResources(type: Copy) {
-    from "${projectDir}/src/test/resources"
+    from "${projectDir}/src/test/resources", "${projectDir}/src/main/resources"
     into "${buildDir}/classes/test"
 }
+
+jacocoTestReport {
+    reports {
+        xml.enabled = true
+        html.enabled = true
+    }
+}
+tasks.jacocoTestReport.dependsOn(test)
 
 processTestResources.dependsOn copyTestResources
 
@@ -35,7 +48,7 @@ ext {
     siteUrl = 'https://github.com/opacapp/opacclient'
     gitUrl = 'https://github.com/opacapp/opacclient.git'
 
-    libraryVersion = '4.5.0-rc-2'
+    libraryVersion = '5.2.1'
 
     developerId = 'opacapp'
     developerName = 'Web Opac App'

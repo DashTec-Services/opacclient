@@ -4,7 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
-import android.support.v4.content.ContextCompat;
+import android.support.graphics.drawable.VectorDrawableCompat;
 import android.support.v4.graphics.drawable.DrawableCompat;
 import android.support.v7.preference.PreferenceManager;
 import android.support.v7.widget.RecyclerView;
@@ -27,16 +27,16 @@ import de.geeksfactory.opacclient.utils.Utils;
 public class DrawerAccountsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private List<Account> accounts;
     private List<Account> accountsWithoutCurrent;
-    private Context context;
+    protected Context context;
     private Map<Account, Integer> expiring;
     private Account currentAccount;
-    private Listener listener;
+    protected Listener listener;
 
-    private static final int TYPE_ACCOUNT = 0;
-    private static final int TYPE_SEPARATOR = 1;
-    private static final int TYPE_FOOTER = 2;
+    protected static final int TYPE_ACCOUNT = 0;
+    protected static final int TYPE_SEPARATOR = 1;
+    protected static final int TYPE_FOOTER = 2;
 
-    private static final int FOOTER_COUNT = 2;
+    protected static final int FOOTER_COUNT = 2;
 
     public DrawerAccountsAdapter(Context context, List<Account> accounts, Account currentAccount) {
         this.accounts = accounts;
@@ -50,14 +50,12 @@ public class DrawerAccountsAdapter extends RecyclerView.Adapter<RecyclerView.Vie
         int tolerance = Integer.parseInt(sp.getString("notification_warning", "3"));
 
         AccountDataSource adata = new AccountDataSource(context);
-        adata.open();
         for (Account account : accounts) {
             expiring.put(account, adata.getExpiring(account, tolerance));
             if (account.getId() != currentAccount.getId()) {
                 accountsWithoutCurrent.add(account);
             }
         }
-        adata.close();
     }
 
     @Override
@@ -148,11 +146,11 @@ public class DrawerAccountsAdapter extends RecyclerView.Adapter<RecyclerView.Vie
     }
 
     public class AccountViewHolder extends RecyclerView.ViewHolder {
-        private TextView title;
-        private TextView subtitle;
-        private TextView warning;
-        private View view;
-        private Account account;
+        protected TextView title;
+        protected TextView subtitle;
+        protected TextView warning;
+        protected View view;
+        protected  Account account;
 
         public AccountViewHolder(View itemView) {
             super(itemView);
@@ -189,13 +187,13 @@ public class DrawerAccountsAdapter extends RecyclerView.Adapter<RecyclerView.Vie
         void onManageAccountsClicked();
     }
 
-    private class SeparatorViewHolder extends RecyclerView.ViewHolder {
+    protected class SeparatorViewHolder extends RecyclerView.ViewHolder {
         public SeparatorViewHolder(View view) {
             super(view);
         }
     }
 
-    private class FooterViewHolder extends RecyclerView.ViewHolder {
+    protected class FooterViewHolder extends RecyclerView.ViewHolder {
         private TextView title;
         private ImageView icon;
         private View view;
@@ -212,7 +210,8 @@ public class DrawerAccountsAdapter extends RecyclerView.Adapter<RecyclerView.Vie
         }
 
         public void setIcon(int id) {
-            Drawable drawable = DrawableCompat.wrap(ContextCompat.getDrawable(context, id));
+            Drawable drawable = DrawableCompat.wrap(VectorDrawableCompat
+                    .create(context.getResources(), id, context.getTheme()));
             DrawableCompat.setTint(drawable, Color.argb(138, 0, 0, 0));
             icon.setImageDrawable(drawable);
         }

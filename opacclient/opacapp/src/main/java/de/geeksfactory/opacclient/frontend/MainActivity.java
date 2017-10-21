@@ -1,6 +1,7 @@
 package de.geeksfactory.opacclient.frontend;
 
 import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.app.PendingIntent;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -12,28 +13,34 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.preference.PreferenceManager;
+import android.support.v4.app.DialogFragment;
 import android.support.v4.app.Fragment;
 import android.support.v4.app.FragmentManager;
 import android.support.v7.app.AlertDialog;
 import android.view.LayoutInflater;
 import android.widget.Toast;
 
+import org.json.JSONException;
+
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
 import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Date;
 import java.util.List;
 
 import de.geeksfactory.opacclient.R;
-import de.geeksfactory.opacclient.apis.OpacApi;
 import de.geeksfactory.opacclient.barcode.BarcodeScanIntegrator;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.LentItem;
 import de.geeksfactory.opacclient.reminder.Alarm;
 import de.geeksfactory.opacclient.reminder.ReminderBroadcastReceiver;
+import de.geeksfactory.opacclient.reminder.SyncAccountAlarmListener;
 import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 import de.geeksfactory.opacclient.storage.AccountDataSource;
+import de.geeksfactory.opacclient.storage.DataIntegrityException;
 import de.geeksfactory.opacclient.storage.JsonSearchFieldDataSource;
 import de.geeksfactory.opacclient.storage.SearchFieldDataSource;
 
@@ -42,6 +49,8 @@ public class MainActivity extends OpacActivity
         SearchResultDetailFragment.Callbacks {
 
     public static final String EXTRA_FRAGMENT = "fragment";
+    public static final String ACTION_SEARCH = "de.geeksfactory.opacclient.SEARCH";
+    public static final String ACTION_ACCOUNT = "de.geeksfactory.opacclient.ACCOUNT";
     private String[][] techListsArray;
     private IntentFilter[] intentFiltersArray;
     private PendingIntent nfcIntent;
@@ -97,23 +106,73 @@ public class MainActivity extends OpacActivity
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        sp = PreferenceManager.getDefaultSharedPreferences(this);
+
+        String itemToSelect = null;
+
         if (getIntent() != null && getIntent().getAction() != null) {
             if (getIntent().getAction().equals("android.intent.action.VIEW")) {
                 urlintent();
-                return;
+            } else if (getIntent().getAction().equals(ACTION_SEARCH)
+                    || getIntent().getAction().equals(ACTION_ACCOUNT)) {
+                String lib = getIntent().getStringExtra("library");
+                AccountDataSource adata = new AccountDataSource(this);
+                List<Account> accounts = adata.getAllAccounts(lib);
+
+                if (accounts.size() == 0) {
+                    // Check if library exists (an IOException should be thrown otherwise, correct?)
+                    try {
+                        app.getLibrary(lib);
+                    } catch (IOException | JSONException e) {
+                        return;
+                    }
+                    Account account = new Account();
+                    account.setLibrary(lib);
+                    account.setLabel(getString(R.string.default_account_name));
+                    account.setName("");
+                    account.setPassword("");
+                    long id = adata.addAccount(account);
+                    selectaccount(id);
+                } else if (accounts.size() == 1) {
+                    selectaccount(accounts.get(0).getId());
+                } else if (accounts.size() > 0) {
+                    if (getIntent().getAction().equals(ACTION_ACCOUNT)) {
+                        List<Account> accountsWithPassword = new ArrayList<>();
+                        for (Account account : accounts) {
+                            if (account.getName() != null && account.getPassword() != null
+                                    && !account.getName().isEmpty()
+                                    && !account.getPassword().isEmpty()) {
+                                accountsWithPassword.add(account);
+                            }
+                        }
+                        if (accountsWithPassword.size() == 1) {
+                            selectaccount(accountsWithPassword.get(0).getId());
+                        } else {
+                            showAccountSelectDialog(accounts);
+                        }
+                    } else {
+                        showAccountSelectDialog(accounts);
+                    }
+                }
+
+                if (getIntent().getAction().equals(ACTION_SEARCH)) {
+                    itemToSelect = "search";
+                } else {
+                    itemToSelect = "account";
+                }
             }
         }
-
-        sp = PreferenceManager.getDefaultSharedPreferences(this);
 
         if (savedInstanceState == null) {
             if (getIntent().hasExtra(EXTRA_FRAGMENT)) {
                 selectItem(getIntent().getStringExtra(EXTRA_FRAGMENT));
             } else if (getIntent().hasExtra(ReminderBroadcastReceiver.EXTRA_ALARM_ID)) {
                 AccountDataSource adata = new AccountDataSource(this);
-                adata.open();
-                Alarm alarm = adata.getAlarm(
-                        getIntent().getLongExtra(ReminderBroadcastReceiver.EXTRA_ALARM_ID, -1));
+                long alid = getIntent().getLongExtra(ReminderBroadcastReceiver.EXTRA_ALARM_ID, -1);
+                Alarm alarm = adata.getAlarm(alid);
+                if (alarm == null) {
+                    throw new DataIntegrityException("Unknown alarm ID " + alid + " received.");
+                }
                 List<LentItem> items = adata.getLentItems(alarm.media);
                 if (items.size() > 0) {
                     long firstAccount = items.get(0).getAccount();
@@ -136,7 +195,8 @@ public class MainActivity extends OpacActivity
                         selectItem("account");
                     }
                 }
-                adata.close();
+            } else if (itemToSelect != null) {
+                selectItem(itemToSelect);
             } else if (sp.contains("startup_fragment")) {
                 selectItem(sp.getString("startup_fragment", "search"));
             } else {
@@ -170,6 +230,28 @@ public class MainActivity extends OpacActivity
         if (app.getLibrary() != null) {
             getSupportActionBar().setSubtitle(app.getLibrary().getDisplayName());
         }
+
+        showUpdateInfoDialog();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            getWindow().setExitTransition(null);
+        }
+    }
+
+    private void showAccountSelectDialog(final List<Account> accounts) {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.account_select)
+                .setAdapter(
+                        new AccountListAdapter(this, accounts)
+                                .setHighlightActiveAccount(false),
+                        new DialogInterface.OnClickListener() {
+
+                            @Override
+                            public void onClick(DialogInterface dialog,
+                                    int which) {
+                                selectaccount(accounts.get(which).getId());
+                            }
+                        }).create().show();
     }
 
     @Override
@@ -209,16 +291,14 @@ public class MainActivity extends OpacActivity
                 throw new AssertionError("UTF-8 is unknown");
             }
 
-            if (!app.getLibrary().getIdent().equals(bib)) {
+            if (app.getLibrary() == null || !app.getLibrary().getIdent().equals(bib)) {
                 AccountDataSource adata = new AccountDataSource(this);
-                adata.open();
                 List<Account> accounts = adata.getAllAccounts(bib);
-                adata.close();
                 if (accounts.size() > 0) {
                     app.setAccount(accounts.get(0).getId());
                 } else {
                     Intent i = new Intent(Intent.ACTION_VIEW,
-                            Uri.parse("http://opacapp.de/web" + d.getPath()));
+                            Uri.parse("https://de.opacapp.net/" + d.getPath()));
                     startActivity(i);
                     return;
                 }
@@ -253,6 +333,7 @@ public class MainActivity extends OpacActivity
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent idata) {
         super.onActivityResult(requestCode, resultCode, idata);
+        fragment.onActivityResult(requestCode, resultCode, idata);
 
         //TODO: Rewrite this for the new SearchField implementation
         // Barcode
@@ -289,7 +370,7 @@ public class MainActivity extends OpacActivity
         if (nfc_capable && sp.getBoolean("nfc_search", false)) {
             try {
                 mAdapter.disableForegroundDispatch(this);
-            } catch (SecurityException e) {
+            } catch (IllegalStateException | SecurityException e) {
                 e.printStackTrace();
             }
         }
@@ -315,8 +396,9 @@ public class MainActivity extends OpacActivity
         }
     }
 
+    @TargetApi(10)
     private void nfcHint() {
-        if (nfc_capable && !sp.getBoolean("nfc_search", false) &&
+        if (nfc_capable && !sp.getBoolean("nfc_search", false) && Build.VERSION.SDK_INT >= 10 &&
                 !sp.getBoolean("nfc_hint_shown", false) && app.getLibrary().isNfcSupported()) {
             new AlertDialog.Builder(this)
                     .setView(LayoutInflater.from(this).inflate(R.layout.dialog_nfc_hint, null))
@@ -405,6 +487,24 @@ public class MainActivity extends OpacActivity
             } catch (Exception e) {
 
             }
+        }
+    }
+
+    public void showUpdateInfoDialog() {
+        if (!getApplicationContext().getPackageName().startsWith("de.geeksfactory.opacclient")) {
+            return;  // Never show e.g. in plus edition
+        }
+
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(this);
+        Calendar cal = Calendar.getInstance();
+        cal.set(2017, 7, 1, 0, 0, 0);
+        if ((new Date()).after(cal.getTime())) {
+            return;
+        }
+        if (!sp.contains("seen_update_dialog_5.1.1")) {
+            DialogFragment newFragment = new UpdateInfoDialogFragment();
+            newFragment.show(getSupportFragmentManager(), "updateinfo");
+            sp.edit().putBoolean("seen_update_dialog_5.1.1", true).commit();
         }
     }
 

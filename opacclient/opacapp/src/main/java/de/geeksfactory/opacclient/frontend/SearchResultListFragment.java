@@ -2,7 +2,6 @@ package de.geeksfactory.opacclient.frontend;
 
 import android.app.Activity;
 import android.content.DialogInterface;
-import android.content.Intent;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.support.v4.app.CustomListFragment;
@@ -25,12 +24,12 @@ import org.json.JSONException;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
 import de.geeksfactory.opacclient.OpacClient;
 import de.geeksfactory.opacclient.R;
+import de.geeksfactory.opacclient.apis.OpacApi;
 import de.geeksfactory.opacclient.apis.OpacApi.OpacErrorException;
 import de.geeksfactory.opacclient.frontend.ResultsAdapterEndless.OnLoadMoreListener;
 import de.geeksfactory.opacclient.networking.NotReachableException;
@@ -38,8 +37,6 @@ import de.geeksfactory.opacclient.networking.SSLSecurityException;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.SearchRequestResult;
 import de.geeksfactory.opacclient.objects.SearchResult;
-import de.geeksfactory.opacclient.searchfields.AndroidMeaningDetector;
-import de.geeksfactory.opacclient.searchfields.MeaningDetector;
 import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchField.Meaning;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
@@ -160,9 +157,7 @@ public class SearchResultListFragment extends CustomListFragment {
 
     private void performGoogleSearch(final String query) {
         AccountDataSource data = new AccountDataSource(getActivity());
-        data.open();
         final List<Account> accounts = data.getAllAccounts();
-        data.close();
 
         if (accounts.size() == 0) {
             Toast.makeText(getActivity(), R.string.welcome_select,
@@ -308,6 +303,12 @@ public class SearchResultListFragment extends CustomListFragment {
             setEmptyText(getString(R.string.no_results));
         }
         this.searchresult = searchresult;
+        OpacApi api = null;
+        try {
+            api = app.getApi();
+        } catch (OpacClient.LibraryRemovedException ignored) {
+
+        }
         adapter = new ResultsAdapterEndless(getActivity(), searchresult,
                 new OnLoadMoreListener() {
                     @Override
@@ -353,7 +354,7 @@ public class SearchResultListFragment extends CustomListFragment {
                                             resultCount, resultCount));
                         }
                     }
-                });
+                }, api);
         setListAdapter(adapter);
         getListView().setTextFilterEnabled(true);
         setListShown(true);
@@ -445,9 +446,16 @@ public class SearchResultListFragment extends CustomListFragment {
 
         @Override
         protected SearchRequestResult doInBackground(Void... voids) {
+            OpacApi api;
+            try {
+                api = app.getApi();
+            } catch (OpacClient.LibraryRemovedException e) {
+                exception = e;
+                return null;
+            }
             if (volumeQuery != null) {
                 try {
-                    return app.getApi().volumeSearch(volumeQuery);
+                    return api.volumeSearch(volumeQuery);
                 } catch (IOException | OpacErrorException e) {
                     exception = e;
                     e.printStackTrace();
@@ -458,7 +466,7 @@ public class SearchResultListFragment extends CustomListFragment {
             } else if (query != null) {
                 try {
                     // Load cover images, if search worked and covers available
-                    return app.getApi().search(query);
+                    return api.search(query);
                 } catch (IOException | OpacErrorException e) {
                     exception = e;
                     e.printStackTrace();
@@ -475,22 +483,12 @@ public class SearchResultListFragment extends CustomListFragment {
             if (result == null) {
 
                 if (exception instanceof OpacErrorException) {
-                    if (exception.getMessage().equals("is_a_redirect")
-                            && getActivity() != null) {
-                        // Some libraries (SISIS) do not show a result list if
-                        // only one result
-                        // is found but instead directly show the result
-                        // details.
-                        Intent intent = new Intent(getActivity(),
-                                SearchResultDetailActivity.class);
-                        intent.putExtra(SearchResultDetailFragment.ARG_ITEM_ID,
-                                (String) null);
-                        startActivity(intent);
-                        getActivity().finish();
-                        return;
-                    }
-
                     showConnectivityError(exception.getMessage());
+                } else if (exception instanceof OpacClient.LibraryRemovedException) {
+                    if (getActivity() != null) {
+                        showConnectivityError(getResources().getString(
+                                R.string.library_removed_error));
+                    }
                 } else if (exception instanceof SSLSecurityException) {
                     if (getActivity() != null) {
                         showConnectivityError(getResources().getString(
@@ -532,20 +530,9 @@ public class SearchResultListFragment extends CustomListFragment {
                         throw new OpacErrorException(
                                 getString(R.string.no_fields_found));
                     }
-                    if (app.getApi().shouldUseMeaningDetector()) {
-                        MeaningDetector md = new AndroidMeaningDetector(
-                                getActivity(), app.getLibrary());
-                        for (int i = 0; i < fields.size(); i++) {
-                            fields.set(i, md.detectMeaning(fields.get(i)));
-                        }
-                        Collections.sort(fields,
-                                new SearchField.OrderComparator());
-                    }
                     return fields;
-                } catch (JSONException | IOException e) {
-                    exception = e;
-                    e.printStackTrace();
-                } catch (OpacErrorException e) {
+                } catch (JSONException | IOException | OpacErrorException | OpacClient
+                        .LibraryRemovedException e) {
                     exception = e;
                     e.printStackTrace();
                 }

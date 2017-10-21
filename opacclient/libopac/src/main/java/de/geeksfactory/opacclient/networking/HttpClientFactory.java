@@ -4,10 +4,17 @@ import org.apache.http.Header;
 import org.apache.http.HttpHost;
 import org.apache.http.HttpRequest;
 import org.apache.http.HttpResponse;
+import org.apache.http.HttpStatus;
 import org.apache.http.ProtocolException;
 import org.apache.http.client.CircularRedirectException;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpHead;
+import org.apache.http.client.methods.HttpRequestBase;
+import org.apache.http.client.methods.HttpRequestWrapper;
+import org.apache.http.client.methods.HttpUriRequest;
+import org.apache.http.client.methods.RequestBuilder;
 import org.apache.http.client.protocol.HttpClientContext;
 import org.apache.http.client.utils.URIUtils;
 import org.apache.http.config.Registry;
@@ -28,12 +35,30 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.CookieManager;
+import java.net.CookiePolicy;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.CertificateException;
+import java.util.ArrayList;
+import java.util.List;
+
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.X509TrustManager;
+
+import okhttp3.CipherSuite;
+import okhttp3.ConnectionSpec;
+import okhttp3.HttpUrl;
+import okhttp3.Interceptor;
+import okhttp3.JavaNetCookieJar;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.TlsVersion;
+import okhttp3.internal.Util;
 
 /**
  * Utility to create a new HTTP client.
@@ -71,7 +96,7 @@ public class HttpClientFactory {
         try {
             in = new FileInputStream(ssl_store_path);
         } catch (FileNotFoundException e) {
-            in = new FileInputStream("opacapp/src/main/res/raw/ssl_trust_store.bks");
+            in = new FileInputStream("../opacapp/src/main/res/raw/ssl_trust_store.bks");
         }
         try {
             trustStore.load(in,
@@ -82,7 +107,7 @@ public class HttpClientFactory {
         return trustStore;
     }
 
-    protected Class<?> getSocketFactoryClass(boolean tls_only) {
+    protected Class<?> getSocketFactoryClass(boolean tls_only, boolean allCipherSuites) {
         return null;
     }
 
@@ -95,7 +120,7 @@ public class HttpClientFactory {
      *                 implementation!
      */
     public HttpClient getNewApacheHttpClient(boolean customssl, boolean tls_only,
-            boolean disguise_app) {
+            boolean allCipherSuites, boolean disguise_app) {
         HttpClientBuilder builder = HttpClientBuilder.create();
         builder.setRedirectStrategy(new CustomRedirectStrategy());
         if (disguise_app) {
@@ -105,14 +130,18 @@ public class HttpClientFactory {
             builder.setUserAgent(user_agent);
         }
 
-        if (customssl) {
+        if (customssl && ssl_store_path != null) {
             try {
                 if (trust_store == null) {
                     trust_store = getKeyStore();
                 }
                 SSLConnectionSocketFactory sf =
-                        AdditionalKeyStoresSSLSocketFactory.create(trust_store,
-                                getSocketFactoryClass(tls_only));
+                        AdditionalKeyStoresSSLSocketFactory.create(
+                                getSocketFactoryClass(tls_only, allCipherSuites),
+                                new AdditionalKeyStoresSSLSocketFactory
+                                        .AdditionalKeyStoresTrustManager(
+                                        trust_store)
+                        );
 
                 Registry<ConnectionSocketFactory> registry =
                         RegistryBuilder.<ConnectionSocketFactory>create().register("http",
@@ -132,11 +161,148 @@ public class HttpClientFactory {
         }
     }
 
+    /**
+     * Create a new OkHttpClient.
+     *
+     * @param tls_only If this is true, only TLS v1 and newer will be used, SSLv3 will be disabled.
+     *                 We highly recommend to set this to true, if possible. This is currently a
+     *                 no-op on the default implementation and only used in the Android
+     *                 implementation!
+     */
+    public OkHttpClient getNewOkHttpClient(boolean customssl, boolean tls_only,
+            boolean allCipherSuites) {
+        OkHttpClient.Builder builder = new OkHttpClient.Builder();
+
+        CookieManager cookieManager = new CookieManager();
+        cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ALL);
+        builder.cookieJar(new JavaNetCookieJar(cookieManager));
+
+        builder.addNetworkInterceptor(new CustomRedirectInterceptor());
+
+        if (customssl && ssl_store_path != null) {
+            try {
+                if (trust_store == null) {
+                    trust_store = getKeyStore();
+                }
+                X509TrustManager trustManager =
+                        new AdditionalKeyStoresSSLSocketFactory.AdditionalKeyStoresTrustManager(
+                                trust_store);
+
+                SSLSocketFactory sf = AdditionalKeyStoresSSLSocketFactory.createForOkHttp(
+                        trustManager
+                );
+
+                if (allCipherSuites) {
+                    sf = new AllCiphersProxySocketFactory(sf);
+                }
+
+                builder.sslSocketFactory(sf, trustManager);
+
+                List<ConnectionSpec> connectionSpecs = new ArrayList<ConnectionSpec>();
+                connectionSpecs.add(ConnectionSpec.MODERN_TLS);
+                connectionSpecs.add(new ConnectionSpec.Builder(ConnectionSpec.COMPATIBLE_TLS)
+                        .allEnabledCipherSuites()
+                        .build());
+
+                if (!tls_only) {
+                    connectionSpecs.add(new ConnectionSpec.Builder(ConnectionSpec.COMPATIBLE_TLS)
+                            .tlsVersions(TlsVersion.SSL_3_0, TlsVersion.TLS_1_0)
+                            .allEnabledCipherSuites()
+                            .build());
+                } else if (allCipherSuites) {
+                    connectionSpecs.add(new ConnectionSpec.Builder(ConnectionSpec.COMPATIBLE_TLS)
+                            .allEnabledCipherSuites()
+                            .build());
+                }
+
+                connectionSpecs.add(ConnectionSpec.CLEARTEXT);
+                builder.connectionSpecs(connectionSpecs);
+
+                return builder.build();
+            } catch (Exception e) {
+                e.printStackTrace();
+                return builder.build();
+            }
+        } else {
+            return builder.build();
+        }
+    }
+
+    public static class CustomRedirectInterceptor implements Interceptor {
+
+        @Override
+        public Response intercept(Chain chain) throws IOException {
+            Request req = chain.request();
+            Response originalResponse = chain.proceed(chain.request());
+
+            if (originalResponse.isRedirect()) {
+                HttpUrl oldUrl = req.url();
+                HttpUrl newUrl = oldUrl.newBuilder(originalResponse.header("Location")).build();
+                if (oldUrl.scheme().equals("https") && newUrl.scheme().equals("http") &&
+                        oldUrl.host().equals(newUrl.host())) {
+                    return originalResponse.newBuilder()
+                                           .header("Location",
+                                                   newUrl.newBuilder().scheme("https").build()
+                                                         .toString())
+                                           .build();
+                }
+            }
+            return originalResponse;
+        }
+    }
+
     public static class CustomRedirectStrategy extends LaxRedirectStrategy {
 
 
         public CustomRedirectStrategy() {
             super();
+        }
+
+        @Override
+        public HttpUriRequest getRedirect(
+                final HttpRequest request,
+                final HttpResponse response,
+                final HttpContext context) throws ProtocolException {
+            URI uri = getLocationURI(request, response, context);
+            final String method = request.getRequestLine().getMethod();
+            String original_scheme = "http";
+            String original_host = "";
+
+            if (request instanceof HttpRequestWrapper) {
+                HttpRequest original = ((HttpRequestWrapper) request).getOriginal();
+                if (original instanceof HttpRequestBase) {
+                    original_scheme = ((HttpRequestBase) original).getURI().getScheme();
+                    original_host = ((HttpRequestBase) original).getURI().getHost();
+                }
+            } else if (request instanceof HttpRequestBase) {
+                if (((HttpRequestBase) request).getURI().getScheme() != null) {
+                    original_scheme = ((HttpRequestBase) request).getURI().getScheme();
+                    original_host = ((HttpRequestBase) request).getURI().getHost();
+                }
+            }
+            // Strict Transport Security for redirects, required for misconfigured webservers
+            // like Erlangen
+            if ("https".equals(original_scheme) && uri.getScheme().equals("http") &&
+                    uri.getHost().equals(original_host)) {
+                try {
+                    uri = new URI(uri.toString().replace("http://", "https://"));
+                } catch (URISyntaxException e) {
+                    e.printStackTrace();
+                }
+            }
+
+            if (method.equalsIgnoreCase(HttpHead.METHOD_NAME)) {
+                return new HttpHead(uri);
+            } else if (method.equalsIgnoreCase(HttpGet.METHOD_NAME)) {
+                return new HttpGet(uri);
+            } else {
+                final int status = response.getStatusLine().getStatusCode();
+                if (status == HttpStatus.SC_TEMPORARY_REDIRECT) {
+                    return RequestBuilder.copy(request).setUri(uri).build();
+                } else {
+                    return new HttpGet(uri);
+                }
+            }
         }
 
         @Override

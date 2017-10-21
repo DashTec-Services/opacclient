@@ -28,7 +28,7 @@ import java.io.IOException;
 import de.geeksfactory.opacclient.apis.OpacApi.OpacErrorException;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 
 /**
  * If an {@link OpacApi} implementation also implements this interface, the library can be used to
@@ -49,25 +49,26 @@ public interface EbookServiceApi {
 
     /**
      * Book an electronical item identified by booking_info to the users account. booking_info is
-     * what you returned in your DetailledItem object in your getResult hook.
+     * what you returned in your DetailedItem object in your getResult hook.
      */
-    public BookingResult booking(DetailledItem item, Account account,
+    public BookingResult booking(DetailedItem item, Account account,
             int useraction, String selection) throws IOException,
             OpacErrorException;
 
     /**
      * Is this a supported downloadable ebook? May not do network requests.
      */
-    public boolean isEbook(DetailledItem item);
+    public boolean isEbook(DetailedItem item);
 
     /**
      * Download the item identified by item_id. Returns an URL where the item can be downloaded
      * from.
      */
-    public String downloadItem(Account account, String item_id);
+    public DownloadResult downloadItem(Account account, String item_id,
+            int useraction, String selection) throws IOException, OpacErrorException;
 
     /**
-     * The result of a {@link EbookServiceApi#booking(DetailledItem, Account, int, String)} call.
+     * The result of a {@link EbookServiceApi#booking(DetailedItem, Account, int, String)} call.
      * The structure of the call and response is similar to {@link OpacApi#reservation
      * (DetailledItem,
      * Account, int, String)}.
@@ -80,6 +81,36 @@ public interface EbookServiceApi {
 
         public BookingResult(Status status, String message) {
             super(status, message);
+        }
+    }
+
+
+    /**
+     * The result of a {@link EbookServiceApi#downloadItem(Account, String, int, String)} call
+     */
+    public class DownloadResult extends OpacApi.MultiStepResult {
+        protected String url;
+
+        public DownloadResult(Status status) {
+            super(status);
+        }
+
+        public DownloadResult(Status status, String message) {
+            super(status, message);
+        }
+
+        public static DownloadResult successFromUrl(String url) {
+            DownloadResult dr = new DownloadResult(Status.OK);
+            dr.setUrl(url);
+            return dr;
+        }
+
+        public String getUrl() {
+            return url;
+        }
+
+        public void setUrl(String url) {
+            this.url = url;
         }
     }
 }

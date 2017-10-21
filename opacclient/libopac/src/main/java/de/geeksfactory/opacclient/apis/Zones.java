@@ -51,7 +51,7 @@ import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Filter.Option;
 import de.geeksfactory.opacclient.objects.LentItem;
@@ -70,7 +70,7 @@ import de.geeksfactory.opacclient.searchfields.TextSearchField;
  *
  * TODO: Kontofunktionen für Zones 1.8.1
  */
-public class Zones extends BaseApi {
+public class Zones extends ApacheBaseApi {
 
     private static HashMap<String, MediaType> defaulttypes = new HashMap<>();
 
@@ -80,6 +80,7 @@ public class Zones extends BaseApi {
         defaulttypes.put("Buch/Druckschrift", MediaType.BOOK);
         defaulttypes.put("Buch Erwachsene", MediaType.BOOK);
         defaulttypes.put("Buch Kinder/Jugendliche", MediaType.BOOK);
+        defaulttypes.put("Buch Kinder/Jugend", MediaType.BOOK);
         defaulttypes.put("Kinder-Buch", MediaType.BOOK);
         defaulttypes.put("DVD", MediaType.DVD);
         defaulttypes.put("Kinder-DVD", MediaType.DVD);
@@ -89,11 +90,16 @@ public class Zones extends BaseApi {
         defaulttypes.put("CD-ROM", MediaType.CD_SOFTWARE);
         defaulttypes.put("Kinder-CD", MediaType.CD_SOFTWARE);
         defaulttypes.put("Noten", MediaType.SCORE_MUSIC);
+        defaulttypes.put("Note", MediaType.SCORE_MUSIC);
         defaulttypes.put("Zeitschrift, Heft", MediaType.MAGAZINE);
+        defaulttypes.put("Zeitschrift", MediaType.MAGAZINE);
         defaulttypes.put("E-Book", MediaType.EBOOK);
         defaulttypes.put("CDROM", MediaType.CD_SOFTWARE);
         defaulttypes.put("E-Audio", MediaType.MP3);
         defaulttypes.put("CD", MediaType.CD);
+        defaulttypes.put("eBook", MediaType.EBOOK);
+        defaulttypes.put("ePaper", MediaType.EBOOK);
+        defaulttypes.put("Plan, Karte", MediaType.MAP);
 
         // Zones 1.8.1 (.gif file names)
         defaulttypes.put("book", MediaType.BOOK);
@@ -111,7 +117,7 @@ public class Zones extends BaseApi {
     private String accountobj;
 
     @Override
-    public List<SearchField> getSearchFields() throws
+    public List<SearchField> parseSearchFields() throws
             IOException {
         if (!initialised) start();
         List<SearchField> fields = new ArrayList<>();
@@ -434,7 +440,7 @@ public class Zones extends BaseApi {
     }
 
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException {
 
         List<NameValuePair> params = new ArrayList<>();
@@ -454,14 +460,14 @@ public class Zones extends BaseApi {
     }
 
     @Override
-    public DetailledItem getResult(int nr) throws IOException {
+    public DetailedItem getResult(int nr) throws IOException {
         return null;
     }
 
-    private DetailledItem parse_result(String id, String html) {
+    private DetailedItem parse_result(String id, String html) {
         Document doc = Jsoup.parse(html);
 
-        DetailledItem result = new DetailledItem();
+        DetailedItem result = new DetailedItem();
         result.setTitle("");
         boolean title_is_set = false;
 
@@ -609,7 +615,7 @@ public class Zones extends BaseApi {
     }
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account acc,
+    public ReservationResult reservation(DetailedItem item, Account acc,
             int useraction, String selection) throws IOException {
         String reservation_info = item.getReservation_info();
         String html = httpGet(opac_url + "/" + reservation_info,
@@ -805,33 +811,9 @@ public class Zones extends BaseApi {
 
         AccountData res = new AccountData(acc.getId());
 
-        String lentLink = null;
-        String resLink = null;
-        int lent_cnt = -1;
-        int res_cnt = -1;
-        for (Element td : login
-                .select(".AccountSummaryCounterNameCell, .AccountSummaryCounterNameCellStripe, " +
-                        ".CAccountDetailFieldNameCellStripe, .CAccountDetailFieldNameCell")) {
-            String section = td.text().trim();
-            if (section.contains("Entliehene Medien")) {
-                lentLink = td.select("a").attr("href");
-                lent_cnt = Integer.parseInt(td.nextElementSibling().text().trim());
-            } else if (section.contains("Vormerkungen")) {
-                resLink = td.select("a").attr("href");
-                res_cnt = Integer.parseInt(td.nextElementSibling().text().trim());
-            } else if (section.contains("Kontostand")) {
-                res.setPendingFees(td.nextElementSibling().text().trim());
-            } else if (section.matches("Ausweis g.ltig bis")) {
-                res.setValidUntil(td.nextElementSibling().text().trim());
-            }
-        }
-        for (Element a : login.select("a.AccountMenuLink")) {
-            if (a.text().contains("Ausleihen")) {
-                lentLink = a.attr("href");
-            } else if (a.text().contains("Vormerkungen")) {
-                resLink = a.attr("href");
-            }
-        }
+        AccountLinks accountLinks = new AccountLinks(login, res);
+        String lentLink = accountLinks.getLentLink();
+        String resLink = accountLinks.getResLink();
         if (lentLink == null) {
             return null;
         }
@@ -854,9 +836,10 @@ public class Zones extends BaseApi {
         }
 
         List<ReservedItem> reservedItems = new ArrayList<>();
-        String resHtml = httpGet(opac_url + "/" + resLink,
-                getDefaultEncoding());
+        String resUrl = opac_url + "/" + resLink;
+        String resHtml = httpGet(resUrl, getDefaultEncoding());
         Document resDoc = Jsoup.parse(resHtml);
+        resDoc.setBaseUri(resUrl);
         loadResList(resDoc, reservedItems);
         res.setReservations(reservedItems);
 
@@ -874,12 +857,12 @@ public class Zones extends BaseApi {
         }
     }
 
-    private void loadResList(Document lentDoc, List<ReservedItem> items) throws IOException {
-        items.addAll(parseResList(lentDoc));
-        String nextPageUrl = findNextPageUrl(lentDoc);
+    private void loadResList(Document resDoc, List<ReservedItem> items) throws IOException {
+        items.addAll(parseResList(resDoc));
+        String nextPageUrl = findNextPageUrl(resDoc);
         if (nextPageUrl != null) {
             Document doc = Jsoup.parse(httpGet(nextPageUrl, getDefaultEncoding()));
-            doc.setBaseUri(lentDoc.baseUri());
+            doc.setBaseUri(resDoc.baseUri());
             loadResList(doc, items);
         }
     }
@@ -961,8 +944,9 @@ public class Zones extends BaseApi {
             if (table.select(".button[Title~=Zum]").size() == 1) {
                 Matcher matcher1 = id_pat.matcher(table.select(".button[Title~=Zum]").attr("href"));
                 if (matcher1.matches()) item.setProlongData(matcher1.group(1));
-            } else if (table.select(".CannotRenewLink").size() == 1){
-                Matcher matcher = cannotrenew_pat.matcher(table.select(".CannotRenewLink").attr("href").trim());
+            } else if (table.select(".CannotRenewLink").size() == 1) {
+                Matcher matcher = cannotrenew_pat
+                        .matcher(table.select(".CannotRenewLink").attr("href").trim());
                 if (matcher.matches()) {
                     item.setProlongData("cannotrenew|" + matcher.group(1));
                 }
@@ -1030,4 +1014,44 @@ public class Zones extends BaseApi {
         return null;
     }
 
+    protected static class AccountLinks {
+        private String lentLink;
+        private String resLink;
+
+        public AccountLinks(Document doc, AccountData res) {
+            lentLink = null;
+            resLink = null;
+            for (Element td : doc
+                    .select(".AccountSummaryCounterNameCell, " +
+                            ".AccountSummaryCounterNameCellStripe, " +
+                            ".CAccountDetailFieldNameCellStripe, .CAccountDetailFieldNameCell")) {
+                String section = td.text().trim();
+                if (section.contains("Entliehene Medien")) {
+                    lentLink = td.select("a").attr("href");
+                } else if (section.contains("Vormerkungen")) {
+                    resLink = td.select("a").attr("href");
+                } else if (section.contains("Kontostand")) {
+                    res.setPendingFees(td.nextElementSibling().text().trim());
+                } else if (section.matches("Ausweis g.ltig bis")
+                        || section.matches("Ausweis\u00a0g.ltig\u00a0bis")) {
+                    res.setValidUntil(td.nextElementSibling().text().trim());
+                }
+            }
+            for (Element a : doc.select("a.AccountMenuLink")) {
+                if (a.text().contains("Ausleihen")) {
+                    lentLink = a.attr("href");
+                } else if (a.text().contains("Vormerkungen")) {
+                    resLink = a.attr("href");
+                }
+            }
+        }
+
+        public String getLentLink() {
+            return lentLink;
+        }
+
+        public String getResLink() {
+            return resLink;
+        }
+    }
 }

@@ -56,7 +56,7 @@ import de.geeksfactory.opacclient.i18n.StringProvider;
 import de.geeksfactory.opacclient.networking.HttpClientFactory;
 import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Filter.Option;
 import de.geeksfactory.opacclient.objects.Library;
@@ -75,7 +75,7 @@ import de.geeksfactory.opacclient.utils.ISBNTools;
  * @author Johan von Forstner, 16.09.2013
  */
 
-public abstract class Pica extends BaseApi implements OpacApi {
+public abstract class Pica extends ApacheBaseApi implements OpacApi {
 
     protected static HashMap<String, MediaType> defaulttypes = new HashMap<>();
     protected static HashMap<String, String> languageCodes = new HashMap<>();
@@ -268,7 +268,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
 
         if (results_total == 1) {
             // Only one result
-            DetailledItem singleResult = parse_result(html);
+            DetailedItem singleResult = parse_result(html);
             SearchResult sr = new SearchResult();
             sr.setType(getMediaTypeInSingleResult(html));
             sr.setInnerhtml("<b>" + singleResult.getTitle() + "</b><br>"
@@ -408,7 +408,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException {
 
         if (id == null && reusehtml != null) {
@@ -433,7 +433,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResult(int position) throws IOException {
+    public DetailedItem getResult(int position) throws IOException {
         if (!initialised) {
             start();
         }
@@ -445,11 +445,11 @@ public abstract class Pica extends BaseApi implements OpacApi {
         return parse_result(html);
     }
 
-    protected DetailledItem parse_result(String html) {
+    protected DetailedItem parse_result(String html) {
         Document doc = Jsoup.parse(html);
         doc.setBaseUri(opac_url);
 
-        DetailledItem result = new DetailledItem();
+        DetailedItem result = new DetailedItem();
         for (Element a : doc.select("a[href*=PPN")) {
             Map<String, String> hrefq = getQueryParamsFirst(a
                     .absUrl("href"));
@@ -459,17 +459,15 @@ public abstract class Pica extends BaseApi implements OpacApi {
         }
 
         // GET COVER
-        if (doc.select("td.preslabel:contains(ISBN) + td.presvalue").size() > 0) {
+        if (doc.select("img[title=Titelbild]").size() > 0) {
+            result.setCover(doc.select("img[title=Titelbild]").first().absUrl("src"));
+        } else if (doc.select("td.preslabel:contains(ISBN) + td.presvalue").size() > 0) {
             Element isbnElement = doc.select(
                     "td.preslabel:contains(ISBN) + td.presvalue").first();
-            String isbn = "";
-            for (Node child : isbnElement.childNodes()) {
-                if (child instanceof TextNode) {
-                    isbn = ((TextNode) child).text().trim();
-                    break;
-                }
+            String isbn = isbnElement.text().trim();
+            if (!isbn.equals("")) {
+                result.setCover(ISBNTools.getAmazonCoverURL(isbn, true));
             }
-            result.setCover(ISBNTools.getAmazonCoverURL(isbn, true));
         }
 
         // GET TITLE AND SUBTITLE
@@ -525,7 +523,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
             }
             String title = titleElem.text().replace("\u00a0", " ").trim();
 
-            if (element.select("hr").size() > 0)
+            if (element.select("hr").size() > 0 || element.text().trim().equals(""))
             // after the separator we get the copies
             {
                 break;
@@ -562,7 +560,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
 
         while (line < lines.size()) {
             Element element = lines.get(line);
-            if (element.select("hr").size() == 0) {
+            if (element.select("hr").size() == 0 && !element.text().trim().equals("")) {
                 Element titleElem = element.firstElementSibling();
                 String detail = element.text().trim();
                 String title = titleElem.text().replace("\u00a0", " ").trim();
@@ -579,10 +577,12 @@ public abstract class Pica extends BaseApi implements OpacApi {
                 } else if (title.contains("Sonderstandort")) {
                     location += " - " + detail;
                 } else if (title.contains("Systemstelle")
+                        || title.contains("Sachgebiete")
                         || title.contains("Subject")) {
                     copy.setDepartment(detail);
                 } else if (title.contains("Fachnummer")
-                        || title.contains("locationnumber")) {
+                        || title.contains("locationnumber")
+                        || title.contains("Schlagwörter")) {
                     copy.setLocation(detail);
                 } else if (title.contains("Signatur")
                         || title.contains("Shelf mark")) {
@@ -621,7 +621,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
                         JSONObject reservation = new JSONObject();
                         try {
                             reservation.put("multi", multipleCopies);
-                            reservation.put("link", _extract_url(a.absUrl("href")));
+                            reservation.put("link", _extract_url(a));
                             reservation.put("desc", location);
                             reservationInfo.put(reservation);
                         } catch (JSONException e1) {
@@ -632,7 +632,9 @@ public abstract class Pica extends BaseApi implements OpacApi {
                 }
             } else {
                 copy.setBranch(location);
-                result.addCopy(copy);
+                if (copy.notEmpty()) {
+                    result.addCopy(copy);
+                }
                 location = "";
                 copy = new Copy();
             }
@@ -656,7 +658,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
                 JSONObject reservation = new JSONObject();
                 try {
                     reservation.put("multi", multipleCopies);
-                    reservation.put("link", _extract_url(a.attr("href")));
+                    reservation.put("link", _extract_url(a));
                     reservation.put("desc", location);
                     reservationInfo.put(reservation);
                 } catch (JSONException e1) {
@@ -679,7 +681,12 @@ public abstract class Pica extends BaseApi implements OpacApi {
         return result;
     }
 
-    private String _extract_url(String javascriptUrl) {
+    private String _extract_url(Element link) {
+        String javascriptUrl = link.absUrl("href");
+        if (javascriptUrl.isEmpty()) {
+            // absUrl does not work with javascript: links, obviously
+            javascriptUrl = link.attr("href");
+        }
         if (javascriptUrl.startsWith("javascript:")) {
             javascriptUrl = javascriptUrl.replaceAll("^javascript:PU\\('(.*)',(.*)\\)(.*)", "$1");
         }
@@ -692,7 +699,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
     }
 
     @Override
-    public List<SearchField> getSearchFields() throws IOException, JSONException {
+    public List<SearchField> parseSearchFields() throws IOException, JSONException {
         if (!initialised) {
             start();
         }
@@ -712,11 +719,11 @@ public abstract class Pica extends BaseApi implements OpacApi {
             field.setData(new JSONObject("{\"ADI\": false}"));
 
             Pattern pattern = Pattern
-                    .compile("\\[X?[A-Za-z]{2,3}:?\\]|\\(X?[A-Za-z]{2,3}:?\\)");
+                    .compile("(?: --- )?(\\[X?[A-Za-z]{2,3}:?\\]|\\(X?[A-Za-z]{2,3}:?\\))");
             Matcher matcher = pattern.matcher(field.getDisplayName());
             if (matcher.find()) {
                 field.getData().put("meaning",
-                        matcher.group().replace(":", "").toUpperCase());
+                        matcher.group(1).replace(":", "").toUpperCase());
                 field.setDisplayName(matcher.replaceFirst("").trim());
             }
 

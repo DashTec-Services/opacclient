@@ -2,19 +2,22 @@ package de.geeksfactory.opacclient.apis;
 
 import org.joda.time.LocalDate;
 import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import de.geeksfactory.opacclient.i18n.StringProvider;
 import de.geeksfactory.opacclient.networking.HttpClientFactory;
+import de.geeksfactory.opacclient.networking.NotReachableException;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.LentItem;
 import de.geeksfactory.opacclient.objects.Library;
@@ -25,9 +28,10 @@ import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 import de.geeksfactory.opacclient.searchfields.TextSearchField;
 
-public class TestApi implements OpacApi {
+public class TestApi extends ApacheBaseApi {
+    private Library library;
     private List<SearchResult> list = new ArrayList<>();
-    private List<DetailledItem> detailList = new ArrayList<>();
+    private List<DetailedItem> detailList = new ArrayList<>();
 
     @Override
     public void start() throws IOException {
@@ -36,6 +40,8 @@ public class TestApi implements OpacApi {
 
     @Override
     public void init(Library library, HttpClientFactory httpClientFactory) {
+        this.library = library;
+
         makeSearchResult("Kurz", null, false);
         makeSearchResult("Weit hinten, hinter den Wortbergen, fern der Länder", null, false);
         makeSearchResult("Kurz", null, true);
@@ -52,6 +58,8 @@ public class TestApi implements OpacApi {
                 image, false);
         makeSearchResult("Kurz", image, true);
         makeSearchResult("Weit hinten, hinter den Wortbergen, fern der Länder", image, true);
+
+        super.init(library, httpClientFactory);
     }
 
     @Override
@@ -67,7 +75,7 @@ public class TestApi implements OpacApi {
         res.setCover(url);
         res.setType(SearchResult.MediaType.BOOK);
         list.add(res);
-        DetailledItem item = new DetailledItem();
+        DetailedItem item = new DetailedItem();
         item.setTitle(name);
         item.setReservable(reservable);
         item.setCover(url);
@@ -126,18 +134,18 @@ public class TestApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException, OpacErrorException {
         return null;
     }
 
     @Override
-    public DetailledItem getResult(int position) throws IOException, OpacErrorException {
+    public DetailedItem getResult(int position) throws IOException, OpacErrorException {
         return detailList.get(position);
     }
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account account,
+    public ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException {
         return null;
     }
@@ -145,7 +153,12 @@ public class TestApi implements OpacApi {
     @Override
     public ProlongResult prolong(String media, Account account, int useraction,
             String selection) throws IOException {
-        return null;
+        try {
+            Thread.sleep(500);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        return new ProlongResult(MultiStepResult.Status.OK);
     }
 
     @Override
@@ -157,7 +170,12 @@ public class TestApi implements OpacApi {
     @Override
     public CancelResult cancel(String media, Account account, int useraction,
             String selection) throws IOException, OpacErrorException {
-        return null;
+        try {
+            Thread.sleep(500);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        return new CancelResult(MultiStepResult.Status.OK);
     }
 
     @Override
@@ -166,24 +184,50 @@ public class TestApi implements OpacApi {
         AccountData data = new AccountData(account.getId());
         List<LentItem> lent = new ArrayList<>();
         List<ReservedItem> reservations = new ArrayList<>();
-        for (int i = 0; i < 6; i++) {
-            LentItem lentItem = new LentItem();
-            lentItem.setAuthor("Max Mustermann");
-            lentItem.setTitle("Lorem Ipsum");
-            lentItem.setStatus("hier ist der Status");
-            lentItem.setDeadline(new LocalDate(1442564454547L));
-            lentItem.setRenewable(false);
-            lentItem.setHomeBranch("Meine Zweigstelle");
-            lentItem.setLendingBranch("Ausleihzweigstelle");
-            lentItem.setBarcode("Barcode");
-            lent.add(lentItem);
 
-            ReservedItem reservedItem = new ReservedItem();
-            reservedItem.setAuthor("Max Mustermann");
-            reservedItem.setTitle("Lorem Ipsum");
-            reservedItem.setReadyDate(LocalDate.now());
-            reservations.add(reservedItem);
+        try {
+            JSONObject d = new JSONObject(httpGet(library.getData().getString("url"), "UTF-8"));
+
+            for (int i = 0; i < d.getJSONArray("lent").length(); i++) {
+                JSONObject l = d.getJSONArray("lent").getJSONObject(i);
+                LentItem lentItem = new LentItem();
+                for (Iterator iter = l.keys(); iter.hasNext(); ) {
+                    String key = (String) iter.next();
+                    lentItem.set(key, l.getString(key));
+                }
+                lent.add(lentItem);
+            }
+            for (int i = 0; i < d.getJSONArray("reservations").length(); i++) {
+                JSONObject l = d.getJSONArray("reservations").getJSONObject(i);
+                ReservedItem resItem = new ReservedItem();
+                for (Iterator iter = l.keys(); iter.hasNext(); ) {
+                    String key = (String) iter.next();
+                    resItem.set(key, l.getString(key));
+                }
+                reservations.add(resItem);
+            }
+        } catch (NotReachableException e) {
+            for (int i = 0; i < 6; i++) {
+                LentItem lentItem = new LentItem();
+                lentItem.setAuthor("Max Mustermann");
+                lentItem.setTitle("Lorem Ipsum");
+                lentItem.setStatus("hier ist der Status");
+                lentItem.setDeadline(new LocalDate(1442564454547L));
+                lentItem.setRenewable(true);
+                lentItem.setProlongData("foo");
+                lentItem.setHomeBranch("Meine Zweigstelle");
+                lentItem.setLendingBranch("Ausleihzweigstelle");
+                lentItem.setBarcode("Barcode");
+                lent.add(lentItem);
+
+                ReservedItem reservedItem = new ReservedItem();
+                reservedItem.setAuthor("Max Mustermann");
+                reservedItem.setTitle("Lorem Ipsum");
+                reservedItem.setReadyDate(LocalDate.now());
+                reservations.add(reservedItem);
+            }
         }
+
         data.setLent(lent);
         data.setReservations(reservations);
         return data;
@@ -196,7 +240,7 @@ public class TestApi implements OpacApi {
     }
 
     @Override
-    public List<SearchField> getSearchFields()
+    public List<SearchField> parseSearchFields()
             throws IOException, OpacErrorException, JSONException {
         List<SearchField> fields = new ArrayList<>();
         fields.add(new TextSearchField("free", "Freie Suche", false, false, "Freie Suche", true,

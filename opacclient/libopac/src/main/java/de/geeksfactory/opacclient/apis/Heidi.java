@@ -41,8 +41,8 @@ import org.jsoup.nodes.TextNode;
 import org.jsoup.select.Elements;
 
 import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
+import java.io.UnsupportedEncodingException;
+import java.net.URLDecoder;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -56,7 +56,7 @@ import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Filter.Option;
 import de.geeksfactory.opacclient.objects.LentItem;
@@ -71,7 +71,7 @@ import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 import de.geeksfactory.opacclient.searchfields.TextSearchField;
 
-public class Heidi extends BaseApi implements OpacApi {
+public class Heidi extends ApacheBaseApi implements OpacApi {
 
     protected String opac_url = "";
     protected Library library;
@@ -228,37 +228,32 @@ public class Heidi extends BaseApi implements OpacApi {
             if (tr.select("span.Z3988").size() == 1) {
                 // Luckily there is a <span class="Z3988"> item which provides
                 // data in a standardized format.
-                List<NameValuePair> z3988data;
+                String zdata = tr.select("span.Z3988").attr("title").replace(";", "%3B").replace(":", "%3A").replace("/", "%2F");
                 boolean hastitle = false;
-                try {
-                    description = new StringBuilder();
-                    z3988data = URLEncodedUtils.parse(new URI("http://dummy/?"
-                            + tr.select("span.Z3988").attr("title")), "UTF-8");
-                    for (NameValuePair nv : z3988data) {
-                        if (nv.getValue() != null) {
-                            if (!nv.getValue().trim().equals("")) {
-                                if (nv.getName().equals("rft.btitle")
-                                        && !hastitle) {
-                                    description.append("<b>").append(nv.getValue()).append("</b>");
-                                    hastitle = true;
-                                } else if (nv.getName().equals("rft.atitle")
-                                        && !hastitle) {
-                                    description.append("<b>").append(nv.getValue()).append("</b>");
-                                    hastitle = true;
-                                } else if (nv.getName().equals("rft.au")) {
-                                    author = nv.getValue();
-                                } else if (nv.getName().equals("rft.aufirst")) {
-                                    author = author + ", " + nv.getValue();
-                                } else if (nv.getName().equals("rft.aulast")) {
-                                    author = nv.getValue();
-                                } else if (nv.getName().equals("rft.date")) {
-                                    description.append("<br />").append(nv.getValue());
-                                }
+                description = new StringBuilder();
+                List<NameValuePair> z3988data = parse_z3988data(zdata);
+                for (NameValuePair nv : z3988data) {
+                    if (nv.getValue() != null) {
+                        if (!nv.getValue().trim().equals("")) {
+                            if (nv.getName().equals("rft.btitle")
+                                    && !hastitle) {
+                                description.append("<b>").append(nv.getValue()).append("</b>");
+                                hastitle = true;
+                            } else if (nv.getName().equals("rft.atitle")
+                                    && !hastitle) {
+                                description.append("<b>").append(nv.getValue()).append("</b>");
+                                hastitle = true;
+                            } else if (nv.getName().equals("rft.au")) {
+                                author = nv.getValue();
+                            } else if (nv.getName().equals("rft.aufirst")) {
+                                author = author + ", " + nv.getValue();
+                            } else if (nv.getName().equals("rft.aulast")) {
+                                author = nv.getValue();
+                            } else if (nv.getName().equals("rft.date")) {
+                                description.append("<br />").append(nv.getValue());
                             }
                         }
                     }
-                } catch (URISyntaxException e) {
-                    description = null;
                 }
             }
             if (!"".equals(author)) {
@@ -313,6 +308,27 @@ public class Heidi extends BaseApi implements OpacApi {
         return new SearchRequestResult(results, results_total, page);
     }
 
+    private List<NameValuePair> parse_z3988data(String zdata) {
+        List<NameValuePair> nvps = new ArrayList<>();
+        for (String tuple : zdata.split("&")) {
+            if (tuple.contains("=")) {
+                String[] parts = tuple.split("=");
+                if (parts.length < 2) {
+                    continue;
+                }
+                try {
+                    nvps.add(new BasicNameValuePair(parts[0], URLDecoder.decode(parts[1],
+                                "UTF-8")));
+                } catch (UnsupportedEncodingException e) {
+                    nvps.add(new BasicNameValuePair(parts[0], "?"));
+                }
+            } else {
+                nvps.add(new BasicNameValuePair(tuple, ""));
+            }
+        }
+        return nvps;
+    }
+
     @Override
     public SearchRequestResult filterResults(Filter filter, Option option)
             throws IOException {
@@ -328,6 +344,11 @@ public class Heidi extends BaseApi implements OpacApi {
         pagefield.setVisible(false);
         pagefield.setDisplayName("Seite");
         pagefield.setHint("");
+        for (SearchQuery q : last_query) {
+            if (q.getKey().equals("_heidi_page")) {
+                last_query.remove(q);
+            }
+        }
         last_query.add(new SearchQuery(pagefield, String.valueOf(page)));
         return search(last_query);
     }
@@ -342,7 +363,7 @@ public class Heidi extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResultById(String id, final String homebranch)
+    public DetailedItem getResultById(String id, final String homebranch)
             throws IOException {
 
         if (sessid == null) {
@@ -358,7 +379,7 @@ public class Heidi extends BaseApi implements OpacApi {
                 + sessid, ENCODING, false, cookieStore);
         Document doc = Jsoup.parse(html);
 
-        DetailledItem item = new DetailledItem();
+        DetailedItem item = new DetailedItem();
         item.setId(id);
 
         Elements table = doc.select(".titelsatz tr");
@@ -424,7 +445,7 @@ public class Heidi extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResult(int position) throws IOException {
+    public DetailedItem getResult(int position) throws IOException {
         throw new UnsupportedOperationException("Not implemented.");
     }
 
@@ -440,7 +461,7 @@ public class Heidi extends BaseApi implements OpacApi {
     }
 
     @Override
-    public List<SearchField> getSearchFields() throws IOException,
+    public List<SearchField> parseSearchFields() throws IOException,
             OpacErrorException, JSONException {
         String html = httpGet(opac_url + "/search.cgi?art=f", ENCODING, false,
                 cookieStore);
@@ -462,9 +483,7 @@ public class Heidi extends BaseApi implements OpacApi {
         Elements zst_opts = doc.select("#teilk2 option");
         for (int i = 0; i < zst_opts.size(); i++) {
             Element opt = zst_opts.get(i);
-            if (!opt.val().equals("")) {
-                field.addDropdownValue(opt.val(), opt.text());
-            }
+            field.addDropdownValue(opt.val(), opt.text());
         }
         field.setDisplayName("Einrichtung");
         field.setId("f[teil2]");
@@ -507,7 +526,7 @@ public class Heidi extends BaseApi implements OpacApi {
     }
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account account,
+    public ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException {
         String html = httpGet(opac_url + "/bestellung.cgi?ks=" + item.getId()
                 + "&sess=" + sessid, ENCODING, false, cookieStore);

@@ -2,7 +2,9 @@ package de.geeksfactory.opacclient.objects;
 
 import org.joda.time.LocalDate;
 
-public class ReservedItem extends AccountItem {
+import java.io.Serializable;
+
+public class ReservedItem extends AccountItem implements Serializable {
     private LocalDate readyDate;
     private LocalDate expirationDate;
     private String branch;
@@ -97,7 +99,7 @@ public class ReservedItem extends AccountItem {
 
     /**
      * @return Internal identifier which will be supplied to your {@link
-     * de.geeksfactory.opacclient.apis.EbookServiceApi#booking(DetailledItem, Account, int, String)}
+     * de.geeksfactory.opacclient.apis.EbookServiceApi#booking(DetailedItem, Account, int, String)}
      * implementation when the user wants to book the order. Booking button won't be displayed if
      * this is not set.
      */
@@ -107,7 +109,7 @@ public class ReservedItem extends AccountItem {
 
     /**
      * Set internal identifier which will be supplied to your {@link de.geeksfactory.opacclient
-     * .apis.EbookServiceApi#booking(DetailledItem,
+     * .apis.EbookServiceApi#booking(DetailedItem,
      * Account, int, String)} implementation when the user wants to book the order. Booking button
      * won't be displayed if this is not set.
      */
@@ -117,6 +119,9 @@ public class ReservedItem extends AccountItem {
 
     @Override
     public void set(String key, String value) {
+        if ("".equals(value)) {
+            value = null;
+        }
         switch (key) {
             case "availability":
                 setReadyDate(new LocalDate(value));
@@ -137,5 +142,25 @@ public class ReservedItem extends AccountItem {
                 super.set(key, value);
                 break;
         }
+    }
+
+    @Override
+    public String toString() {
+        return "ReservedItem{" +
+                "account=" + account +
+                ", title='" + title + '\'' +
+                ", author='" + author + '\'' +
+                ", format='" + format + '\'' +
+                ", mediaType=" + mediaType +
+                ", id='" + id + '\'' +
+                ", status='" + status + '\'' +
+                ", dbId=" + dbId +
+                ", cover='" + cover + '\'' +
+                ", readyDate=" + readyDate +
+                ", expirationDate=" + expirationDate +
+                ", branch='" + branch + '\'' +
+                ", cancelData='" + cancelData + '\'' +
+                ", bookingData='" + bookingData + '\'' +
+                '}';
     }
 }

@@ -55,7 +55,7 @@ import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Filter.Option;
 import de.geeksfactory.opacclient.objects.LentItem;
@@ -77,7 +77,7 @@ import de.geeksfactory.opacclient.searchfields.TextSearchField;
  * @author Johan von Forstner, 17.09.2013
  */
 
-public class IOpac extends BaseApi implements OpacApi {
+public class IOpac extends ApacheBaseApi implements OpacApi {
 
     protected static HashMap<String, MediaType> defaulttypes = new HashMap<>();
 
@@ -408,7 +408,7 @@ public class IOpac extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException {
 
         if (!initialised) {
@@ -426,7 +426,7 @@ public class IOpac extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResult(int position) throws IOException {
+    public DetailedItem getResult(int position) throws IOException {
         if (!initialised) {
             start();
         }
@@ -439,10 +439,10 @@ public class IOpac extends BaseApi implements OpacApi {
         return parse_result(html);
     }
 
-    protected DetailledItem parse_result(String html) throws IOException {
+    protected DetailedItem parse_result(String html) throws IOException {
         Document doc = Jsoup.parse(html);
 
-        DetailledItem result = new DetailledItem();
+        DetailedItem result = new DetailedItem();
 
         String id = null;
         if (doc.select("input[name=mednr]").size() > 0) {
@@ -534,7 +534,7 @@ public class IOpac extends BaseApi implements OpacApi {
     }
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account account,
+    public ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException {
         String reservation_info = item.getReservation_info();
         // STEP 1: Login page
@@ -722,6 +722,9 @@ public class IOpac extends BaseApi implements OpacApi {
             Matcher matcher = regex.matcher(h4.text());
             if (matcher.find()) res.setValidUntil(matcher.group(1));
         }
+        if (doc.select(".ReaderAccount_expiredID").size() > 0) {
+            res.setWarning(doc.select(".ReaderAccount_expiredID").text());
+        }
 
         if (media.isEmpty() && reserved.isEmpty()) {
             if (doc.select("h1").size() > 0) {
@@ -794,6 +797,7 @@ public class IOpac extends BaseApi implements OpacApi {
         }
 
         Pattern datePattern = Pattern.compile("\\d{2}\\.\\d{2}\\.\\d{4}");
+        Pattern reservedPattern = Pattern.compile("\\d+ x reserv.");
         for (int i = 1; i < trs; i++) {
             Element tr = copytrs.get(i);
             LentItem item = new LentItem();
@@ -820,8 +824,8 @@ public class IOpac extends BaseApi implements OpacApi {
             if (data.optInt("maxprolongcount", -1) != -1) {
                 item.setRenewable(prolongCount < data.optInt("maxprolongcount", -1));
             }
-            if (copymap.optInt("deadline", 4) >= 0) {
-                String value = tr.child(copymap.optInt("deadline", 4)).text().trim()
+            if (copymap.optInt("returndate", 4) >= 0) {
+                String value = tr.child(copymap.optInt("returndate", 4)).text().trim()
                                  .replace("\u00a0", "");
                 Matcher matcher = datePattern.matcher(value);
                 if (matcher.find()) {
@@ -829,6 +833,14 @@ public class IOpac extends BaseApi implements OpacApi {
                         item.setDeadline(fmt.parseLocalDate(matcher.group()));
                     } catch (IllegalArgumentException e1) {
                         e1.printStackTrace();
+                    }
+                }
+                matcher = reservedPattern.matcher(value);
+                if (matcher.find()) {
+                    if (item.getStatus() != null) {
+                        item.setStatus(item.getStatus() + ", " + matcher.group());
+                    } else {
+                        item.setStatus(matcher.group());
                     }
                 }
             }
@@ -879,11 +891,16 @@ public class IOpac extends BaseApi implements OpacApi {
 
             item.setTitle(tr.child(0).text().trim().replace("\u00a0", ""));
             item.setAuthor(tr.child(1).text().trim().replace("\u00a0", ""));
-            try {
-                item.setReadyDate(
-                        fmt.parseLocalDate(tr.child(4).text().trim().replace("\u00a0", "")));
-            } catch (IllegalArgumentException e) {
-                item.setStatus(tr.child(4).text().trim().replace("\u00a0", ""));
+            String readyDate = tr.child(4).text().trim().replace("\u00a0", "");
+            if (readyDate.equals("")) {
+                item.setStatus("bereit");
+            } else {
+                try {
+                    item.setReadyDate(
+                            fmt.parseLocalDate(readyDate));
+                } catch (IllegalArgumentException e) {
+                    item.setStatus(readyDate);
+                }
             }
             if (tr.select("a").size() > 0) {
                 item.setCancelData(tr.select("a").last().attr("href"));
@@ -923,7 +940,7 @@ public class IOpac extends BaseApi implements OpacApi {
     }
 
     @Override
-    public List<SearchField> getSearchFields() throws IOException {
+    public List<SearchField> parseSearchFields() throws IOException {
         List<SearchField> fields = new ArrayList<>();
 
         // Extract all search fields, except media types

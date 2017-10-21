@@ -1,23 +1,20 @@
 /**
  * Copyright (C) 2013 by Raphael Michel under the MIT license:
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), 
- * to deal in the Software without restriction, including without limitation 
- * the rights to use, copy, modify, merge, publish, distribute, sublicense, 
- * and/or sell copies of the Software, and to permit persons to whom the Software 
- * is furnished to do so, subject to the following conditions:
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+ * associated documentation files (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge, publish, distribute,
+ * sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in 
- * all copies or substantial portions of the Software.
+ * The above copyright notice and this permission notice shall be included in all copies or
+ * substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
- * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, 
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
- * DEALINGS IN THE SOFTWARE.
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+ * NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+ * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 package de.geeksfactory.opacclient.apis;
 
@@ -42,7 +39,6 @@ import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLEncoder;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -60,7 +56,7 @@ import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Filter.Option;
 import de.geeksfactory.opacclient.objects.LentItem;
@@ -79,7 +75,7 @@ import de.geeksfactory.opacclient.searchfields.TextSearchField;
  *
  * Restrictions: Bookmarks are only constantly supported if the library uses the BibTip extension.
  */
-public class SISIS extends BaseApi implements OpacApi {
+public class SISIS extends ApacheBaseApi implements OpacApi {
     protected static HashMap<String, MediaType> defaulttypes = new HashMap<>();
 
     static {
@@ -160,13 +156,16 @@ public class SISIS extends BaseApi implements OpacApi {
     protected JSONObject data;
     protected String CSId;
     protected String identifier;
-    protected String reusehtml;
     protected int resultcount = 10;
     protected long logged_in;
     protected Account logged_in_as;
-    protected String ENCODING = "UTF-8";
+    protected static final String ENCODING = "UTF-8";
 
-    public List<SearchField> getSearchFields() throws IOException,
+    protected String getDefaultEncoding() {
+        return ENCODING;
+    }
+
+    public List<SearchField> parseSearchFields() throws IOException,
             JSONException {
         if (!initialised) {
             start();
@@ -271,7 +270,7 @@ public class SISIS extends BaseApi implements OpacApi {
             }
             if (entry.getSearchField() instanceof DropdownSearchField) {
                 JSONObject data = entry.getSearchField().getData();
-                if (data.getBoolean("restriction")) {
+                if (data.optBoolean("restriction", false)) {
                     params.add(new BasicNameValuePair("searchRestrictionID["
                             + restrictionIndex + "]", entry.getSearchField()
                                                            .getId()));
@@ -312,7 +311,7 @@ public class SISIS extends BaseApi implements OpacApi {
         String html = httpGet(
                 opac_url + "/search.do?"
                         + URLEncodedUtils.format(params, "UTF-8"), ENCODING);
-        return parse_search(html, 1);
+        return parse_search_wrapped(html, 1);
     }
 
     public SearchRequestResult volumeSearch(Map<String, String> query)
@@ -326,7 +325,7 @@ public class SISIS extends BaseApi implements OpacApi {
         String html = httpGet(
                 opac_url + "/search.do?"
                         + URLEncodedUtils.format(params, "UTF-8"), ENCODING);
-        return parse_search(html, 1);
+        return parse_search_wrapped(html, 1);
     }
 
     @Override
@@ -339,11 +338,28 @@ public class SISIS extends BaseApi implements OpacApi {
         String html = httpGet(opac_url
                 + "/hitList.do?methodToCall=pos&identifier=" + identifier
                 + "&curPos=" + (((page - 1) * resultcount) + 1), ENCODING);
-        return parse_search(html, page);
+        return parse_search_wrapped(html, page);
     }
 
-    protected SearchRequestResult parse_search(String html, int page)
-            throws OpacErrorException {
+    public class SingleResultFound extends Exception {
+    }
+
+    protected SearchRequestResult parse_search_wrapped(String html, int page)
+            throws IOException, OpacErrorException {
+        try {
+            return parse_search(html, page);
+        } catch (SingleResultFound e) {
+            html = httpGet(opac_url + "/hitList.do?methodToCall=backToPrimaryHitList", ENCODING);
+            try {
+                return parse_search(html, page);
+            } catch (SingleResultFound e1) {
+                throw new NotReachableException();
+            }
+        }
+    }
+
+    public SearchRequestResult parse_search(String html, int page)
+            throws OpacErrorException, SingleResultFound {
         Document doc = Jsoup.parse(html);
         doc.setBaseUri(opac_url + "/searchfoo");
 
@@ -361,8 +377,7 @@ public class SISIS extends BaseApi implements OpacApi {
 
         String resultnumstr = doc.select(".box-header h2").first().text();
         if (resultnumstr.contains("(1/1)") || resultnumstr.contains(" 1/1")) {
-            reusehtml = html;
-            throw new OpacErrorException("is_a_redirect");
+            throw new SingleResultFound();
         } else if (resultnumstr.contains("(")) {
             results_total = Integer.parseInt(resultnumstr.replaceAll(
                     ".*\\(([0-9]+)\\).*", "$1"));
@@ -456,7 +471,7 @@ public class SISIS extends BaseApi implements OpacApi {
                            .not("#hlrightblock,.bestellfunktionen").size() == 1) {
                 Element indiv = middlething.select("div")
                                            .not("#hlrightblock,.bestellfunktionen").first();
-                if (indiv.children().size() > 1) {
+                if (indiv.select("a").size() > 0 && indiv.children().size() > 1) {
                     children = indiv.childNodes();
                 }
             } else if (middlething.select("span.titleData").size() == 1) {
@@ -572,6 +587,9 @@ public class SISIS extends BaseApi implements OpacApi {
                             description.append("<br />");
                         }
                         description.append(part[2]);
+                    } else if (k == 1 && !yearfound) {
+                        description.append("<br />");
+                        description.append(part[2]);
                     } else if (k > 1 && k < 4 && !sigfound
                             && part[0].equals("text")
                             && part[2].matches("^[A-Za-z0-9,\\- ]+$")) {
@@ -594,6 +612,7 @@ public class SISIS extends BaseApi implements OpacApi {
                 if (sr.getStatus() == null) {
                     if ((part[2].contains("entliehen") && part[2]
                             .startsWith("Vormerkung ist leider nicht möglich"))
+                            || part[2].contains("Alle Exemplare des gewählten Titels sind entliehen")
                             || part[2]
                             .contains(
                                     "nur in anderer Zweigstelle ausleihbar und nicht bestellbar")) {
@@ -641,13 +660,11 @@ public class SISIS extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException {
 
-        if (id == null && reusehtml != null) {
-            DetailledItem r = parse_result(reusehtml);
-            reusehtml = null;
-            return r;
+        if (id.startsWith("http://") || id.startsWith("https://")) {
+            return loadDetail(id);
         }
 
         // Some libraries require start parameters for start.do, like Login=foo
@@ -668,43 +685,61 @@ public class SISIS extends BaseApi implements OpacApi {
         String html = httpGet(opac_url + "/start.do?" + startparams
                 + "searchType=1&Query=0%3D%22" + id + "%22" + hbp, ENCODING);
 
-        return parse_result(html);
+        return loadDetail(html);
     }
 
     @Override
-    public DetailledItem getResult(int nr) throws IOException {
-        if (reusehtml != null) {
-            return getResultById(null, null);
-        }
+    public DetailedItem getResult(int nr) throws IOException {
 
         String html = httpGet(
                 opac_url
                         + "/singleHit.do?tab=showExemplarActive&methodToCall=showHit&curPos="
                         + (nr + 1) + "&identifier=" + identifier, ENCODING);
 
-        return parse_result(html);
+        return loadDetail(html);
     }
 
-    protected DetailledItem parse_result(String html) throws IOException {
-        Document doc = Jsoup.parse(html);
-        doc.setBaseUri(opac_url);
-
+    protected DetailedItem loadDetail(String html) throws IOException {
         String html2 = httpGet(opac_url
                         + "/singleHit.do?methodToCall=activateTab&tab=showTitleActive",
                 ENCODING);
-
-        Document doc2 = Jsoup.parse(html2);
-        doc2.setBaseUri(opac_url);
-
         String html3 = httpGet(
                 opac_url
                         + "/singleHit.do?methodToCall=activateTab&tab=showAvailabilityActive",
                 ENCODING);
 
+        String coverJs = null;
+        Pattern coverPattern = Pattern.compile("\\$\\.ajax\\(\\{[\\n\\s]*url: '(jsp/result/cover" +
+                ".jsp\\?[^']+')");
+        Matcher coverMatcher = coverPattern.matcher(html);
+        if (coverMatcher.find()) {
+            coverJs = httpGet(opac_url + "/" + coverMatcher.group(1), ENCODING);
+        }
+
+        DetailedItem result = parseDetail(html, html2, html3, coverJs, data, stringProvider);
+        try {
+            if (!result.getCover().contains("amazon")) downloadCover(result);
+        } catch (Exception e) {
+
+        }
+        return result;
+    }
+
+    static DetailedItem parseDetail(String html, String html2, String html3, String coverJs,
+            JSONObject data,
+            StringProvider stringProvider)
+            throws IOException {
+        Document doc = Jsoup.parse(html);
+        String opac_url = data.optString("baseurl", "");
+        doc.setBaseUri(opac_url);
+
+        Document doc2 = Jsoup.parse(html2);
+        doc2.setBaseUri(opac_url);
+
         Document doc3 = Jsoup.parse(html3);
         doc3.setBaseUri(opac_url);
 
-        DetailledItem result = new DetailledItem();
+        DetailedItem result = new DetailedItem();
 
         try {
             result.setId(doc.select("#bibtip_id").text().trim());
@@ -741,13 +776,18 @@ public class SISIS extends BaseApi implements OpacApi {
             // TODO: Multiple options - handle this case!
         }
 
-        if (doc.select(".data td img").size() == 1) {
-            result.setCover(doc.select(".data td img").first().attr("abs:src"));
-            try {
-                downloadCover(result);
-            } catch (Exception e) {
+        if (result.getId() == null && doc.select("#permalink_link").size() > 0) {
+            result.setId(doc.select("#permalink_link").text());
+        }
 
+        if (coverJs != null) {
+            Pattern srcPattern = Pattern.compile("<img .* src=\"([^\"]+)\">");
+            Matcher matcher = srcPattern.matcher(coverJs);
+            if (matcher.find()) {
+                result.setCover(matcher.group(1));
             }
+        } else if (doc.select(".data td img").size() == 1) {
+            result.setCover(doc.select(".data td img").first().attr("abs:src"));
         }
 
         if (doc.select(".aw_teaser_title").size() == 1) {
@@ -769,17 +809,27 @@ public class SISIS extends BaseApi implements OpacApi {
         Element detailtrs = doc2.select(".box-container .data td").first();
         for (Node node : detailtrs.childNodes()) {
             if (node instanceof Element) {
-                if (((Element) node).tagName().equals("strong")) {
-                    title = ((Element) node).text().trim();
-                    text = "";
+                Element element = (Element) node;
+                if (element.tagName().equals("strong")) {
+                    if (element.hasClass("c2")) {
+                        if (!title.equals("")) {
+                            result.addDetail(new Detail(title, text.trim()));
+                        }
+                        title = element.text().trim();
+                        text = "";
+                    } else {
+                        text = text + element.text();
+                    }
                 } else {
-                    if (((Element) node).tagName().equals("a")
-                            && (((Element) node).text().trim()
-                                                .contains("hier klicken") || title
-                            .equals("Link:"))) {
-                        text = text + node.attr("href");
-                        takeover = true;
-                        break;
+                    if (element.tagName().equals("a")) {
+                        if (element.text().trim().contains("hier klicken") ||
+                                title.contains("Link")) {
+                            text = text + node.attr("href");
+                            takeover = true;
+                            break;
+                        } else {
+                            text = text + element.text();
+                        }
                     }
                 }
             } else if (node instanceof TextNode) {
@@ -797,8 +847,7 @@ public class SISIS extends BaseApi implements OpacApi {
                 if (node instanceof Element) {
                     if (((Element) node).tagName().equals("strong")) {
                         if (!text.equals("") && !title.equals("")) {
-                            result.addDetail(new Detail(title.trim(), text
-                                    .trim()));
+                            result.addDetail(new Detail(title.trim(), text.trim()));
                             if (title.equals("Titel:")) {
                                 result.setTitle(text.trim());
                             }
@@ -863,6 +912,12 @@ public class SISIS extends BaseApi implements OpacApi {
                         .getString(StringProvider.DOWNLOAD), link
                         .absUrl("href")));
             }
+        }
+        if (doc3.select("#tab-content .textrot").size() > 0) {
+            result.addDetail(new Detail(
+                    stringProvider.getString(StringProvider.STATUS),
+                    doc3.select("#tab-content .textrot").text()
+            ));
         }
 
         Map<String, Integer> copy_columnmap = new HashMap<>();
@@ -930,7 +985,7 @@ public class SISIS extends BaseApi implements OpacApi {
                     copy.setReservations(matcher.group(3));
                     copy.setReturnDate(fmt.parseLocalDate(matcher.group(2)));
                 } else {
-                    copy.setStatus(statustext);
+                    copy.setStatus(statustext.trim().replace(" Wegweiser", ""));
                 }
                 copy.setBarcode(barcodetext);
                 if (status.select("a[href*=doVormerkung]").size() == 1) {
@@ -993,7 +1048,7 @@ public class SISIS extends BaseApi implements OpacApi {
     }
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account acc,
+    public ReservationResult reservation(DetailedItem item, Account acc,
             int useraction, String selection) throws IOException {
         String reservation_info = item.getReservation_info();
         final String branch_inputfield = "issuepoint";
@@ -1019,6 +1074,7 @@ public class SISIS extends BaseApi implements OpacApi {
 
             if (doc.select("input[name=username]").size() > 0) {
                 // Login vonnöten
+                CSId = doc.select("input[name=CSId]").val();
                 List<NameValuePair> nameValuePairs = new ArrayList<>(
                         2);
                 nameValuePairs.add(new BasicNameValuePair("username", acc
@@ -1093,6 +1149,11 @@ public class SISIS extends BaseApi implements OpacApi {
         if (doc.getElementsByClass("error").size() >= 1) {
             return new ReservationResult(MultiStepResult.Status.ERROR, doc
                     .getElementsByClass("error").get(0).text());
+        }
+
+        if (doc.html().contains("jsp/error.jsp")) {
+            return new ReservationResult(MultiStepResult.Status.ERROR, doc
+                    .getElementsByTag("h2").get(0).text());
         }
 
         if (doc.select("#CirculationForm p").size() > 0
@@ -1286,6 +1347,7 @@ public class SISIS extends BaseApi implements OpacApi {
                         loginPageDoc.select("input[name=as_fid]").first()
                                     .attr("value")));
             }
+            CSId = loginPageDoc.select("input[name=CSId]").val();
         } catch (IOException e1) {
             e1.printStackTrace();
         }
@@ -1297,7 +1359,7 @@ public class SISIS extends BaseApi implements OpacApi {
         nameValuePairs.add(new BasicNameValuePair("methodToCall", "submit"));
         try {
             html = handleLoginMessage(httpPost(opac_url + "/login.do",
-                    new UrlEncodedFormEntity(nameValuePairs), ENCODING));
+                    new UrlEncodedFormEntity(nameValuePairs, ENCODING), ENCODING));
         } catch (UnsupportedEncodingException e) {
             e.printStackTrace();
             return false;
@@ -1322,9 +1384,10 @@ public class SISIS extends BaseApi implements OpacApi {
         return true;
     }
 
-    protected void parse_medialist(List<LentItem> media, Document doc, int offset) {
+    public static void parse_medialist(List<LentItem> media, Document doc, int offset,
+            JSONObject data) {
         Elements copytrs = doc.select(".data tr");
-        doc.setBaseUri(opac_url);
+        doc.setBaseUri(data.optString("baseurl"));
 
         DateTimeFormatter fmt = DateTimeFormat.forPattern("dd.MM.yyyy").withLocale(Locale.GERMAN);
 
@@ -1337,7 +1400,8 @@ public class SISIS extends BaseApi implements OpacApi {
             Element tr = copytrs.get(i);
             LentItem item = new LentItem();
 
-            if (tr.text().contains("keine Daten")) {
+            if (tr.text().contains("keine Daten") || (trs == 2 && tr.children().size() == 1)) {
+                // Dresden: Konto entält keine &lt;Ausleihen&gt;. [sic!]
                 return;
             }
 
@@ -1443,7 +1507,7 @@ public class SISIS extends BaseApi implements OpacApi {
         List<LentItem> medien = new ArrayList<>();
         Document doc = Jsoup.parse(html);
         doc.setBaseUri(opac_url);
-        parse_medialist(medien, doc, 1);
+        parse_medialist(medien, doc, 1, data);
         if (doc.select(".box-right").size() > 0) {
             for (Element link : doc.select(".box-right").first().select("a")) {
                 String href = link.attr("abs:href");
@@ -1455,7 +1519,7 @@ public class SISIS extends BaseApi implements OpacApi {
                         && !"1".equals(hrefq.get("anzPos"))) {
                     html = httpGet(href, ENCODING);
                     parse_medialist(medien, Jsoup.parse(html),
-                            Integer.parseInt(hrefq.get("anzPos")));
+                            Integer.parseInt(hrefq.get("anzPos")), data);
                 }
             }
         }

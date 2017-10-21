@@ -33,11 +33,11 @@ import de.geeksfactory.opacclient.networking.HttpClientFactory;
 import de.geeksfactory.opacclient.networking.NotReachableException;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Library;
 import de.geeksfactory.opacclient.objects.SearchRequestResult;
-import de.geeksfactory.opacclient.searchfields.MeaningDetector;
+import de.geeksfactory.opacclient.reporting.ReportHandler;
 import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 
@@ -53,7 +53,7 @@ public interface OpacApi {
      *
      * Flag to be present in the result of {@link #getSupportFlags()}.
      */
-    public static final int SUPPORT_FLAG_ACCOUNT_PROLONG_ALL = 0x0000002;
+    int SUPPORT_FLAG_ACCOUNT_PROLONG_ALL = 0x0000002;
 
     /**
      * Availability of the "quicklinks" feature
@@ -61,7 +61,7 @@ public interface OpacApi {
      * Flag to be present in the result of {@link #getSupportFlags()}.
      */
     @SuppressWarnings("UnusedDeclaration") // Plus Edition compatibility
-    public static final int SUPPORT_FLAG_QUICKLINKS = 0x0000004;
+            int SUPPORT_FLAG_QUICKLINKS = 0x0000004;
 
     /**
      * When the results are shown as an endless scrolling list, will reload the page the selected
@@ -69,21 +69,26 @@ public interface OpacApi {
      *
      * Flag to be present in the result of {@link #getSupportFlags()}.
      */
-    public static final int SUPPORT_FLAG_ENDLESS_SCROLLING = 0x0000008;
+    int SUPPORT_FLAG_ENDLESS_SCROLLING = 0x0000008;
 
     /**
      * Allow account change on reservation click.
      *
      * Flag to be present in the result of {@link #getSupportFlags()}.
      */
-    public static final int SUPPORT_FLAG_CHANGE_ACCOUNT = 0x0000010;
+    int SUPPORT_FLAG_CHANGE_ACCOUNT = 0x0000010;
 
     /**
      * Asks the user responsibly about reservation fees
      *
      * Flag to be present in the result of {@link #getSupportFlags()}.
      */
-    public static final int SUPPORT_FLAG_WARN_RESERVATION_FEES = 0x0000020;
+    int SUPPORT_FLAG_WARN_RESERVATION_FEES = 0x0000020;
+
+    /**
+     * Asks the user responsibly about prolong fees
+     */
+    int SUPPORT_FLAG_WARN_PROLONG_FEES = 0x0000040;
 
     /**
      * May be called on application startup and you are free to call it in our {@link #search}
@@ -98,7 +103,7 @@ public interface OpacApi {
      * @throws IOException           if network connection failed
      * @throws NotReachableException may throw this if the library couldn't be reached
      */
-    public void start() throws IOException;
+    void start() throws IOException;
 
     /**
      * Is called whenever a new API object is created. The difference to start is that you can rely
@@ -110,14 +115,14 @@ public interface OpacApi {
      *                          HTTP clients. This factory is pluggable because we want to use
      *                          platform-specific code on Android.
      */
-    public void init(Library library, HttpClientFactory httpClientFactory);
+    void init(Library library, HttpClientFactory httpClientFactory);
 
     /**
      * Performs a catalogue search. The given <code>List&lt;SearchQuery&gt;</code> contains the
      * search criteria. See documentation on <code>SearchResult</code> for details.
      *
      * This function is always called from a background thread, you can use blocking network
-     * operations in it. See documentation on DetailledItem for details.
+     * operations in it. See documentation on DetailedItem for details.
      *
      * @param query see above
      * @return List of results and additional information, or result object with the error flag set
@@ -125,23 +130,23 @@ public interface OpacApi {
      * @throws JSONException
      * @see de.geeksfactory.opacclient.objects.SearchResult
      */
-    public SearchRequestResult search(List<SearchQuery> query)
+    SearchRequestResult search(List<SearchQuery> query)
             throws IOException, OpacErrorException,
             JSONException;
 
     /**
      * Performs a catalogue search for volumes of an item. The query is given to it from {@link
-     * DetailledItem#getVolumesearch()}.
+     * DetailedItem#getVolumesearch()}.
      *
      * This function is always called from a background thread, you can use blocking network
-     * operations in it. See documentation on DetailledItem for details.
+     * operations in it. See documentation on DetailedItem for details.
      *
      * @param query see above
      * @return List of results and additional information, or result object with the error flag set
      * to true.
      * @see de.geeksfactory.opacclient.objects.SearchResult
      */
-    public SearchRequestResult volumeSearch(Map<String, String> query)
+    SearchRequestResult volumeSearch(Map<String, String> query)
             throws IOException, OpacErrorException;
 
     /**
@@ -154,7 +159,7 @@ public interface OpacApi {
      * <code>null</code>.
      *
      * This function is always called from a background thread, you can use blocking network
-     * operations in it. See documentation on DetailledItem for details.
+     * operations in it. See documentation on DetailedItem for details.
      *
      * @param filter The filter to be applied.
      * @param option The filters option to be applied. If the <code>option.isApplied()</code>
@@ -167,14 +172,14 @@ public interface OpacApi {
      */
     @SuppressWarnings({"SameReturnValue", "RedundantThrows", "UnusedDeclaration"})
     // Plus Edition compatibility
-    public SearchRequestResult filterResults(Filter filter, Filter.Option option)
+    SearchRequestResult filterResults(Filter filter, Filter.Option option)
             throws IOException, OpacErrorException;
 
     /**
      * Get result page <code>page</code> of the search performed last with {@link #search}.
      *
      * This function is always called from a background thread, you can use blocking network
-     * operations in it. See documentation on DetailledItem for details.
+     * operations in it. See documentation on DetailedItem for details.
      *
      * @param page page number to fetch
      * @return List of results and additional information, or result object with the error flag set
@@ -182,7 +187,7 @@ public interface OpacApi {
      * @see #search(List)
      * @see de.geeksfactory.opacclient.objects.SearchResult
      */
-    public SearchRequestResult searchGetPage(int page) throws IOException,
+    SearchRequestResult searchGetPage(int page) throws IOException,
             OpacErrorException, JSONException;
 
     /**
@@ -196,9 +201,9 @@ public interface OpacApi {
      *                   require this information at search request time to determine where book
      *                   reservations should be placed. If in doubt, set to <code>null</code>.
      * @return Media details
-     * @see de.geeksfactory.opacclient.objects.DetailledItem
+     * @see DetailedItem
      */
-    public DetailledItem getResultById(String id, String homebranch)
+    DetailedItem getResultById(String id, String homebranch)
             throws IOException, OpacErrorException;
 
     /**
@@ -214,9 +219,9 @@ public interface OpacApi {
      *
      * @param position position of object in last search
      * @return Media details
-     * @see de.geeksfactory.opacclient.objects.DetailledItem
+     * @see DetailedItem
      */
-    public DetailledItem getResult(int position) throws IOException,
+    DetailedItem getResult(int position) throws IOException,
             OpacErrorException;
 
     /**
@@ -241,7 +246,7 @@ public interface OpacApi {
      *                   selection.
      * @return A <code>ReservationResult</code> object which has to have the status set.
      */
-    public ReservationResult reservation(DetailledItem item, Account account,
+    ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException;
 
     /**
@@ -266,7 +271,7 @@ public interface OpacApi {
      *                   selection.
      * @return A <code>ProlongResult</code> object which has to have the status set.
      */
-    public ProlongResult prolong(String media, Account account, int useraction,
+    ProlongResult prolong(String media, Account account, int useraction,
             String selection) throws IOException;
 
     /**
@@ -282,7 +287,7 @@ public interface OpacApi {
      * @see OpacApi#prolong(String, Account, int, String)
      * @see de.geeksfactory.opacclient.objects.AccountData
      */
-    public ProlongAllResult prolongAll(Account account, int useraction,
+    ProlongAllResult prolongAll(Account account, int useraction,
             String selection) throws IOException;
 
     /**
@@ -307,7 +312,7 @@ public interface OpacApi {
      *                   selection.
      * @return A <code>CancelResult</code> object which has to have the status set.
      */
-    public CancelResult cancel(String media, Account account, int useraction,
+    CancelResult cancel(String media, Account account, int useraction,
             String selection) throws IOException, OpacErrorException;
 
     /**
@@ -320,7 +325,7 @@ public interface OpacApi {
      * @return Account details
      * @see de.geeksfactory.opacclient.objects.AccountData
      */
-    public AccountData account(Account account) throws IOException,
+    AccountData account(Account account) throws IOException,
             JSONException, OpacErrorException;
 
     /**
@@ -335,7 +340,7 @@ public interface OpacApi {
      * @throws OpacErrorException when the login data is invalid or there's another error message
      *                            from the OPAC system
      */
-    public void checkAccountData(Account account) throws IOException,
+    void checkAccountData(Account account) throws IOException,
             JSONException, OpacErrorException;
 
     /**
@@ -350,7 +355,7 @@ public interface OpacApi {
      * @see #search
      */
     @SuppressWarnings("RedundantThrows")
-    public List<SearchField> getSearchFields() throws IOException,
+    List<SearchField> getSearchFields() throws IOException,
             OpacErrorException, JSONException;
 
     /**
@@ -364,27 +369,21 @@ public interface OpacApi {
      * @param title Title of the item to be shared
      * @return An URL or <strong>null</strong>.
      */
-    public String getShareUrl(String id, String title);
+    String getShareUrl(String id, String title);
 
     /**
      * Return which optional features your API implementation supports.
      *
      * @return combination (bitwise OR) of <code>SUPPORT_FLAG_*</code> constants
      */
-    public int getSupportFlags();
-
-    /**
-     * Returns whether the {@link MeaningDetector} should be used to automatically detect the
-     * meanings of this library's search fields
-     */
-    public boolean shouldUseMeaningDetector();
+    int getSupportFlags();
 
     /**
      * Sets the StringProvider to use for error messages etc.
      *
      * @param stringProvider the StringProvider to use
      */
-    public void setStringProvider(StringProvider stringProvider);
+    void setStringProvider(StringProvider stringProvider);
 
     /**
      * Get all languages supported by this library. This will be a Set of language codes defined in
@@ -397,7 +396,7 @@ public interface OpacApi {
      *
      * @throws IOException
      */
-    public Set<String> getSupportedLanguages() throws IOException;
+    Set<String> getSupportedLanguages() throws IOException;
 
     /**
      * Set the language to use. This should be one of the language codes defined in ISO-639-1
@@ -409,12 +408,24 @@ public interface OpacApi {
      *
      * @param language the language to use
      */
-    public void setLanguage(String language);
+    void setLanguage(String language);
+
+    /**
+     * Sets the report handler to use.
+     *
+     * If an error occurs or other unexpected things happen (such as needing to use a fallback
+     * behaviour that should normally not need to be used) the API might generate a {@link
+     * de.geeksfactory.opacclient.reporting.Report} containing further debugging information. You
+     * can optionally handle these reports (e.g. to send them to the developer) using this methods.
+     *
+     * @param reportHandler the report handler to use
+     */
+    void setReportHandler(ReportHandler reportHandler);
 
     /**
      * A general exception containing a human-readable error message
      */
-    public class OpacErrorException extends Exception {
+    class OpacErrorException extends Exception {
 
         private static final long serialVersionUID = 5834803212488872907L;
 
@@ -435,7 +446,7 @@ public interface OpacApi {
      *
      * @since 2.0.18
      */
-    public abstract class MultiStepResult {
+    abstract class MultiStepResult {
 
         /**
          * Action type identifier for process confirmation
@@ -530,22 +541,25 @@ public interface OpacApi {
         }
 
         /**
-         * Set details the user should confirm if {@link #getStatus()} is
-         * <code>CONFIRMATION_NEEDED</code>.
+         * If {@link #getStatus()} is <code>CONFIRMATION_NEEDED</code>, this gives you more
+         * information to display to the user. This is a list of of unknown length. Every list entry
+         * is an array of strings that of size one or two (which can vary between the elements of
+         * the list). If the size of such an array A is two, then A[0] contains a description of
+         * A[1], e.g. <code>A = {"Fee", "2 EUR"}</code> or <code>A = {"Pickup location", "Central library"}</code>.
+         * If the size is only one, it is a general message to be shown, e.g.
+         * <code>{"This action will cost 2 EUR."}</code>.
          *
-         * @return ContentValue tuples with key to give back and value to show to the users.
+         * @return A list of String[] entries, as described above.
          */
         public List<String[]> getDetails() {
             return details;
         }
 
         /**
-         * Set values the user should select one of if {@link #getStatus()} is set to
-         * <code>CONFIRMATION_NEEDED</code> .
+         * Set details the user should confirm if {@link #getStatus()} is
+         * <code>CONFIRMATION_NEEDED</code>.
          *
-         * @param details List containing reservation details. A detail is stored as an array of two
-         *                strings, the detail's description (e.g. "Fee") and the detail itself (e.g.
-         *                "2 EUR")
+         * @param details List containing reservation details. See {@link #getDetails()} for what this means.
          */
         public void setDetails(List<String[]> details) {
             this.details = details;
@@ -596,12 +610,22 @@ public interface OpacApi {
             EMAIL_NEEDED
         }
 
+        @Override
+        public String toString() {
+            return "MultiStepResult{" +
+                    "status=" + status +
+                    ", selection=" + selection +
+                    ", details=" + details +
+                    ", actionidentifier=" + actionidentifier +
+                    ", message='" + message + '\'' +
+                    '}';
+        }
     }
 
     /**
-     * The result of a {@link OpacApi#reservation(DetailledItem, Account, int, String)} call
+     * The result of a {@link OpacApi#reservation(DetailedItem, Account, int, String)} call
      */
-    public class ReservationResult extends MultiStepResult {
+    class ReservationResult extends MultiStepResult {
 
         /**
          * Action type identifier for library branch selection
@@ -620,7 +644,7 @@ public interface OpacApi {
     /**
      * The result of a {@link OpacApi#prolong(String, Account, int, String)} call
      */
-    public class ProlongResult extends MultiStepResult {
+    class ProlongResult extends MultiStepResult {
 
         public ProlongResult(Status status) {
             super(status);
@@ -634,7 +658,7 @@ public interface OpacApi {
     /**
      * The result of a {@link OpacApi#prolongAll(Account, int, String)} call
      */
-    public class ProlongAllResult extends MultiStepResult {
+    class ProlongAllResult extends MultiStepResult {
 
         public static final String KEY_LINE_TITLE = "title";
         public static final String KEY_LINE_AUTHOR = "author";
@@ -670,7 +694,7 @@ public interface OpacApi {
     /**
      * The result of a {@link OpacApi#cancel(String, Account, int, String)} call
      */
-    public class CancelResult extends MultiStepResult {
+    class CancelResult extends MultiStepResult {
 
         public CancelResult(Status status) {
             super(status);

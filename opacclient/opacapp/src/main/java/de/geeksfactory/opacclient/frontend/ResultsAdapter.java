@@ -22,6 +22,7 @@
 package de.geeksfactory.opacclient.frontend;
 
 import android.content.Context;
+import android.support.annotation.DrawableRes;
 import android.text.Html;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -30,9 +31,15 @@ import android.widget.ArrayAdapter;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import org.apache.http.client.HttpClient;
+
 import java.util.List;
 
 import de.geeksfactory.opacclient.R;
+import de.geeksfactory.opacclient.apis.ApacheBaseApi;
+import de.geeksfactory.opacclient.apis.BaseApi;
+import de.geeksfactory.opacclient.apis.OpacApi;
+import de.geeksfactory.opacclient.networking.AndroidHttpClientFactory;
 import de.geeksfactory.opacclient.networking.CoverDownloadTask;
 import de.geeksfactory.opacclient.objects.CoverHolder;
 import de.geeksfactory.opacclient.objects.SearchResult;
@@ -42,11 +49,12 @@ import de.geeksfactory.opacclient.utils.BitmapUtils;
 public class ResultsAdapter extends ArrayAdapter<SearchResult> {
     private List<SearchResult> objects;
 
-    public ResultsAdapter(Context context, List<SearchResult> objects) {
+    public ResultsAdapter(Context context, List<SearchResult> objects, OpacApi api) {
         super(context, R.layout.listitem_searchresult, objects);
         this.objects = objects;
     }
 
+    @DrawableRes
     public static int getResourceByMediaType(MediaType type) {
         switch (type) {
             case NONE:

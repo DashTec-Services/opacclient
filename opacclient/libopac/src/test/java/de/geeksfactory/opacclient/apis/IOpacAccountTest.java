@@ -13,10 +13,12 @@ import java.util.List;
 import de.geeksfactory.opacclient.objects.LentItem;
 import de.geeksfactory.opacclient.objects.ReservedItem;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 @RunWith(Parameterized.class)
-public class IOpacAccountTest extends BaseAccountTest {
+public class IOpacAccountTest extends BaseHtmlTest {
     private String file;
 
     public IOpacAccountTest(String file) {
@@ -39,9 +41,14 @@ public class IOpacAccountTest extends BaseAccountTest {
         String html = readResource("/iopac/" + file);
         List<LentItem> media = new ArrayList<>();
         IOpac.parseMediaList(media, Jsoup.parse(html), new JSONObject());
+        assertTrue(media.size() > 0);
         for (LentItem item : media) {
             assertNotNull(item.getTitle());
             assertNotNull(item.getDeadline());
+        }
+
+        if (file.equals("heide.html")) {
+            assertEquals("0x verl., 1 x reserv.", media.get(1).getStatus());
         }
     }
 

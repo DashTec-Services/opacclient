@@ -17,14 +17,16 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 @RunWith(Parameterized.class)
-public class PicaOldAccountTest extends BaseAccountTest {
+public class PicaOldAccountTest extends BaseHtmlTest {
     private String file;
 
     public PicaOldAccountTest(String file) {
         this.file = file;
     }
 
-    private static final String[] FILES = new String[]{"marburg.html", "frankfurt_stgeorgen.html"};
+    private static final String[] FILES =
+            new String[]{"marburg.html", "frankfurt_stgeorgen.html", "hildesheim_ub.html",
+                    "hildesheim_hawk.html"};
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<String[]> files() {

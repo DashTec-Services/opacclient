@@ -22,7 +22,7 @@ import de.geeksfactory.opacclient.i18n.StringProvider;
 import de.geeksfactory.opacclient.networking.HttpClientFactory;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.LentItem;
 import de.geeksfactory.opacclient.objects.Library;
 import de.geeksfactory.opacclient.objects.ReservedItem;
@@ -42,7 +42,7 @@ public class PicaLBS extends Pica {
     }
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account account,
+    public ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException {
         try {
             JSONArray json = new JSONArray(item.getReservation_info());
@@ -281,8 +281,14 @@ public class PicaLBS extends Pica {
             String numberOfReservations =
                     extractAccountInfo(tr, "Vormerkung", "Number of reservations");
             if (numberOfReservations != null) {
-                status.append(stringProvider.getFormattedString(
-                        StringProvider.RESERVATIONS_NUMBER, numberOfReservations));
+                try {
+                    status.append(stringProvider.getQuantityString(
+                            StringProvider.RESERVATIONS_NUMBER,
+                            Integer.parseInt(numberOfReservations.trim()),
+                            Integer.parseInt(numberOfReservations.trim())));
+                } catch (NumberFormatException e) {
+                    status.append(numberOfReservations);
+                }
             }
 
             String reservationDate = extractAccountInfo(tr, "Reservationdate", "Vormerkungsdatum");
@@ -339,7 +345,7 @@ public class PicaLBS extends Pica {
         if (!html.contains("Login") && !html.equals("")) return;
 
         // Get JSESSIONID cookie
-        httpGet(lbsUrl + "/LBS_WEB/borrower/borrower.htm?USR=1000&BES=1&LAN=" + getLang(),
+        httpGet(lbsUrl + "/LBS_WEB/borrower/borrower.htm?USR=1000&BES=" + db + "&LAN=" + getLang(),
                 getDefaultLBSEncoding());
         List<NameValuePair> data = new ArrayList<>();
         data.add(new BasicNameValuePair("j_username", account.getName()));

@@ -21,32 +21,22 @@
  */
 package de.geeksfactory.opacclient.apis;
 
-import org.apache.http.HttpEntity;
-import org.apache.http.HttpResponse;
 import org.apache.http.NameValuePair;
-import org.apache.http.client.CookieStore;
-import org.apache.http.client.HttpClient;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.client.methods.HttpPost;
-import org.apache.http.client.protocol.ClientContext;
-import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.client.utils.URLEncodedUtils;
 import org.apache.http.message.BasicNameValuePair;
-import org.apache.http.protocol.BasicHttpContext;
-import org.apache.http.protocol.HttpContext;
-import org.apache.http.util.EntityUtils;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.InterruptedIOException;
 import java.io.UnsupportedEncodingException;
-import java.net.URISyntaxException;
 import java.net.URLDecoder;
-import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -54,12 +44,12 @@ import java.util.Set;
 import de.geeksfactory.opacclient.i18n.DummyStringProvider;
 import de.geeksfactory.opacclient.i18n.StringProvider;
 import de.geeksfactory.opacclient.networking.HttpClientFactory;
-import de.geeksfactory.opacclient.networking.HttpUtils;
-import de.geeksfactory.opacclient.networking.NotReachableException;
-import de.geeksfactory.opacclient.networking.SSLSecurityException;
-import de.geeksfactory.opacclient.objects.CoverHolder;
 import de.geeksfactory.opacclient.objects.Library;
 import de.geeksfactory.opacclient.objects.SearchRequestResult;
+import de.geeksfactory.opacclient.reporting.ReportHandler;
+import de.geeksfactory.opacclient.searchfields.MeaningDetector;
+import de.geeksfactory.opacclient.searchfields.MeaningDetectorImpl;
+import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 
 /**
@@ -67,12 +57,11 @@ import de.geeksfactory.opacclient.searchfields.SearchQuery;
  */
 public abstract class BaseApi implements OpacApi {
 
-    protected HttpClient http_client;
     protected Library library;
     protected StringProvider stringProvider;
     protected Set<String> supportedLanguages;
     protected boolean initialised;
-    protected boolean httpLoggingEnabled = true;
+    protected ReportHandler reportHandler;
 
     /**
      * Keywords to do a free search. Some APIs do support this, some don't. If supported, it must at
@@ -237,41 +226,6 @@ public abstract class BaseApi implements OpacApi {
     protected static final String KEY_SEARCH_QUERY_ORDER = "order";
 
     /**
-     * Cleans the parameters of a URL by parsing it manually and reformatting it using {@link
-     * URLEncodedUtils#format(java.util.List, String)}
-     *
-     * @param myURL the URL to clean
-     * @return cleaned URL
-     */
-    public static String cleanUrl(String myURL) {
-        String[] parts = myURL.split("\\?");
-        String url = parts[0];
-        try {
-            if (parts.length > 1) {
-                url += "?";
-                List<NameValuePair> params = new ArrayList<>();
-                String[] pairs = parts[1].split("&");
-                for (String pair : pairs) {
-                    String[] kv = pair.split("=");
-                    if (kv.length > 1) {
-                        params.add(new BasicNameValuePair(URLDecoder.decode(
-                                kv[0], "UTF-8"), URLDecoder.decode(kv[1],
-                                "UTF-8")));
-                    } else {
-                        params.add(new BasicNameValuePair(URLDecoder.decode(
-                                kv[0], "UTF-8"), ""));
-                    }
-                }
-                url += URLEncodedUtils.format(params, "UTF-8");
-            }
-            return url;
-        } catch (UnsupportedEncodingException e) {
-            e.printStackTrace();
-            return myURL;
-        }
-    }
-
-    /**
      * Reads content from an InputStream into a string
      *
      * @param is       InputStream to read from
@@ -401,10 +355,6 @@ public abstract class BaseApi implements OpacApi {
      */
     @Override
     public void init(Library library, HttpClientFactory http_client_factory) {
-        http_client = http_client_factory.getNewApacheHttpClient(
-                library.getData().optBoolean("customssl", false),
-                library.getData().optBoolean("customssl_tls_only", true),
-                library.getData().optBoolean("disguise", false));
         this.library = library;
         stringProvider = new DummyStringProvider();
     }
@@ -414,224 +364,11 @@ public abstract class BaseApi implements OpacApi {
         initialised = true;
     }
 
-    /**
-     * Perform a HTTP GET request to a given URL
-     *
-     * @param url           URL to fetch
-     * @param encoding      Expected encoding of the response body
-     * @param ignore_errors If true, status codes above 400 do not raise an exception
-     * @param cookieStore   If set, the given cookieStore is used instead of the built-in one.
-     * @return Answer content
-     * @throws NotReachableException Thrown when server returns a HTTP status code greater or equal
-     *                               than 400.
-     */
-    public String httpGet(String url, String encoding, boolean ignore_errors,
-            CookieStore cookieStore) throws
-            IOException {
-
-        HttpGet httpget = new HttpGet(cleanUrl(url));
-        HttpResponse response;
-        String html;
-        httpget.setHeader("Accept", "*/*");
-
-        try {
-            if (cookieStore != null) {
-                // Create local HTTP context
-                HttpContext localContext = new BasicHttpContext();
-                // Bind custom cookie store to the local context
-                localContext.setAttribute(ClientContext.COOKIE_STORE,
-                        cookieStore);
-
-                response = http_client.execute(httpget, localContext);
-            } else {
-                response = http_client.execute(httpget);
-            }
-
-            if (!ignore_errors && response.getStatusLine().getStatusCode() >= 400) {
-                HttpUtils.consume(response.getEntity());
-                throw new NotReachableException(response.getStatusLine().getReasonPhrase());
-            }
-
-            html = convertStreamToString(response.getEntity().getContent(),
-                    encoding);
-            HttpUtils.consume(response.getEntity());
-        } catch (javax.net.ssl.SSLPeerUnverifiedException e) {
-            logHttpError(e);
-            throw new SSLSecurityException(e.getMessage());
-        } catch (javax.net.ssl.SSLException e) {
-            // Can be "Not trusted server certificate" or can be a
-            // aborted/interrupted handshake/connection
-            if (e.getMessage().contains("timed out")
-                    || e.getMessage().contains("reset by")) {
-                logHttpError(e);
-                throw new NotReachableException(e.getMessage());
-            } else {
-                logHttpError(e);
-                throw new SSLSecurityException(e.getMessage());
-            }
-        } catch (InterruptedIOException e) {
-            logHttpError(e);
-            throw new NotReachableException(e.getMessage());
-        } catch (UnknownHostException e) {
-            throw new NotReachableException(e.getMessage());
-        } catch (IOException e) {
-            if (e.getMessage() != null
-                    && e.getMessage().contains("Request aborted")) {
-                logHttpError(e);
-                throw new NotReachableException(e.getMessage());
-            } else {
-                throw e;
-            }
-        }
-        return html;
-    }
-
-    public String httpGet(String url, String encoding, boolean ignore_errors)
-            throws IOException {
-        return httpGet(url, encoding, ignore_errors, null);
-    }
-
-    public String httpGet(String url, String encoding)
-            throws IOException {
-        return httpGet(url, encoding, false, null);
-    }
-
-    @Deprecated
-    public String httpGet(String url) throws
-            IOException {
-        return httpGet(url, getDefaultEncoding(), false, null);
-    }
-
-    /**
-     * Downloads a cover to a CoverHolder. You only need to use this if the covers are only
-     * available with e.g. Session cookies. Otherwise, it is sufficient to specify the URL of the
-     * cover.
-     *
-     * @param item CoverHolder to download the cover for
-     */
-    public void downloadCover(CoverHolder item) {
-        if (item.getCover() == null) {
-            return;
-        }
-        HttpGet httpget = new HttpGet(cleanUrl(item.getCover()));
-        HttpResponse response;
-
-        try {
-            response = http_client.execute(httpget);
-
-            if (response.getStatusLine().getStatusCode() >= 400) {
-                return;
-            }
-            HttpEntity entity = response.getEntity();
-            byte[] bytes = EntityUtils.toByteArray(entity);
-
-            item.setCoverBitmap(bytes);
-
-        } catch (IOException e) {
-            logHttpError(e);
-        }
-    }
-
-    /**
-     * Perform a HTTP POST request to a given URL
-     *
-     * @param url           URL to fetch
-     * @param data          POST data to send
-     * @param encoding      Expected encoding of the response body
-     * @param ignore_errors If true, status codes above 400 do not raise an exception
-     * @param cookieStore   If set, the given cookieStore is used instead of the built-in one.
-     * @return Answer content
-     * @throws NotReachableException Thrown when server returns a HTTP status code greater or equal
-     *                               than 400.
-     */
-    public String httpPost(String url, HttpEntity data,
-            String encoding, boolean ignore_errors, CookieStore cookieStore)
-            throws IOException {
-        HttpPost httppost = new HttpPost(cleanUrl(url));
-        httppost.setEntity(data);
-        httppost.setHeader("Accept", "*/*");
-
-        HttpResponse response;
-        String html;
-        try {
-            if (cookieStore != null) {
-                // Create local HTTP context
-                HttpContext localContext = new BasicHttpContext();
-                // Bind custom cookie store to the local context
-                localContext.setAttribute(ClientContext.COOKIE_STORE,
-                        cookieStore);
-
-                response = http_client.execute(httppost, localContext);
-            } else {
-                response = http_client.execute(httppost);
-            }
-
-            if (!ignore_errors && response.getStatusLine().getStatusCode() >= 400) {
-                throw new NotReachableException(response.getStatusLine().getReasonPhrase());
-            }
-            html = convertStreamToString(response.getEntity().getContent(),
-                    encoding);
-            HttpUtils.consume(response.getEntity());
-        } catch (javax.net.ssl.SSLPeerUnverifiedException e) {
-            logHttpError(e);
-            throw new SSLSecurityException(e.getMessage());
-        } catch (javax.net.ssl.SSLException e) {
-            // Can be "Not trusted server certificate" or can be a
-            // aborted/interrupted handshake/connection
-            if (e.getMessage().contains("timed out")
-                    || e.getMessage().contains("reset by")) {
-                logHttpError(e);
-                throw new NotReachableException(e.getMessage());
-            } else {
-                logHttpError(e);
-                throw new SSLSecurityException(e.getMessage());
-            }
-        } catch (InterruptedIOException e) {
-            logHttpError(e);
-            throw new NotReachableException(e.getMessage());
-        } catch (UnknownHostException e) {
-            throw new NotReachableException(e.getMessage());
-        } catch (IOException e) {
-            if (e.getMessage() != null
-                    && e.getMessage().contains("Request aborted")) {
-                logHttpError(e);
-                throw new NotReachableException(e.getMessage());
-            } else {
-                throw e;
-            }
-        }
-        return html;
-    }
-
-    protected void logHttpError(Throwable e) {
-        if (httpLoggingEnabled) {
-            e.printStackTrace();
-        }
-    }
-
-    public String httpPost(String url, HttpEntity data,
-            String encoding, boolean ignore_errors)
-            throws IOException {
-        return httpPost(url, data, encoding, ignore_errors, null);
-    }
-
-    public String httpPost(String url, HttpEntity data,
-            String encoding) throws IOException {
-        return httpPost(url, data, encoding, false, null);
-    }
-
-    @Deprecated
-    public String httpPost(String url, HttpEntity data)
-            throws IOException {
-        return httpPost(url, data, getDefaultEncoding(), false, null);
-    }
-
     protected String getDefaultEncoding() {
         return "ISO-8859-1";
     }
 
-    @Override
-    public boolean shouldUseMeaningDetector() {
+    protected boolean shouldUseMeaningDetector() {
         return true;
     }
 
@@ -646,16 +383,106 @@ public abstract class BaseApi implements OpacApi {
         this.stringProvider = stringProvider;
     }
 
-    public static String buildHttpGetParams(List<NameValuePair> params)
-            throws UnsupportedEncodingException {
+    @Override
+    public List<SearchField> getSearchFields()
+            throws JSONException, OpacErrorException, IOException {
+        List<SearchField> fields = parseSearchFields();
+        if (shouldUseMeaningDetector()) {
+            MeaningDetector md = new MeaningDetectorImpl(library);
+            for (int i = 0; i < fields.size(); i++) {
+                fields.set(i, md.detectMeaning(fields.get(i)));
+            }
+            Collections.sort(fields, new SearchField.OrderComparator());
+        }
+        return fields;
+    }
+
+    public abstract List<SearchField> parseSearchFields() throws IOException, OpacErrorException,
+            JSONException;
+
+    public void setReportHandler(ReportHandler reportHandler) {
+        this.reportHandler = reportHandler;
+    }
+
+
+    /**
+     * Converts a {@link JSONObject} that contains only integer values into a {@link Map}.
+     *
+     * @param json a JSON object
+     * @return a Map
+     */
+    protected static Map<String, Integer> jsonToMap(JSONObject json) {
+        Map<String, Integer> map = new HashMap<>();
+        Iterator keys = json.keys();
+        while (keys.hasNext()) {
+            String key = (String) keys.next();
+            try {
+                int value = json.getInt(key);
+                if (value >= 0) map.put(key, value);
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
+        }
+        return map;
+    }
+
+
+    /**
+     * Loads a resource file in JSON format to a {@link JSONObject}. Returns null if an error
+     * occurred.
+     *
+     * @param filename the file name, relative to the resources directory, starting with a slash
+     * @return the loaded JSON object
+     */
+    protected JSONObject loadJsonResource(String filename) {
+        InputStream is = getClass().getResourceAsStream(filename);
+        if (is == null) return null;
         try {
-            return new URIBuilder().addParameters(params).build().toString();
-        } catch (URISyntaxException e) {
-            throw new RuntimeException(e);
+            return new JSONObject(convertStreamToString(is));
+        } catch (IOException | JSONException e) {
+            e.printStackTrace();
+            return null;
         }
     }
 
-    public void setHttpLoggingEnabled(boolean httpLoggingEnabled) {
-        this.httpLoggingEnabled = httpLoggingEnabled;
+
+    /**
+     * Cleans the parameters of a URL by parsing it manually and reformatting it using {@link
+     * URLEncodedUtils#format(java.util.List, String)}
+     *
+     * @param myURL the URL to clean
+     * @return cleaned URL
+     */
+    public static String cleanUrl(String myURL) {
+        String[] parts = myURL.split("\\?");
+        String url = parts[0];
+        try {
+            if (parts.length > 1) {
+                url += "?";
+                List<NameValuePair> params = new ArrayList<>();
+                String[] pairs = parts[1].split("&");
+                for (String pair : pairs) {
+                    String[] kv = pair.split("=");
+                    if (kv.length > 1) {
+                        StringBuilder join = new StringBuilder();
+                        for (int i = 1; i < kv.length; i++) {
+                            if (i > 1) join.append("=");
+                            join.append(kv[i]);
+                        }
+                        params.add(new BasicNameValuePair(URLDecoder.decode(
+                                kv[0], "UTF-8"), URLDecoder.decode(join.toString(),
+                                "UTF-8")));
+                    } else {
+                        params.add(new BasicNameValuePair(URLDecoder.decode(
+                                kv[0], "UTF-8"), ""));
+                    }
+                }
+                url += URLEncodedUtils.format(params, "UTF-8");
+            }
+            return url;
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+            return myURL;
+        }
     }
 }

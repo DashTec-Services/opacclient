@@ -28,6 +28,7 @@ import de.geeksfactory.opacclient.R;
 import de.geeksfactory.opacclient.frontend.SnoozeDatePickerActivity;
 import de.geeksfactory.opacclient.objects.LentItem;
 import de.geeksfactory.opacclient.storage.AccountDataSource;
+import de.geeksfactory.opacclient.storage.DataIntegrityException;
 
 public class ReminderBroadcastReceiver extends BroadcastReceiver {
     public static final String EXTRA_ALARM_ID = "alarmId";
@@ -51,11 +52,9 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
         this.prefs = PreferenceManager.getDefaultSharedPreferences(context);
 
         adata = new AccountDataSource(context);
-        adata.open();
         alarm = adata.getAlarm(intent.getLongExtra(EXTRA_ALARM_ID, -1));
 
         if (alarm == null) {
-            adata.close();
             return;
         }
 
@@ -76,7 +75,6 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
                 notificationDontRemindAgain();
                 break;
         }
-        adata.close();
         // reschedule alarms
         new ReminderHelper((OpacClient) context.getApplicationContext()).scheduleAlarms();
     }
@@ -94,13 +92,29 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
         }
         if (BuildConfig.DEBUG) Log.i(LOG_TAG, "showing notification");
 
-        alarm.notified = true;
-        adata.updateAlarm(alarm);
-
         List<LentItem> expiringItems = new ArrayList<>();
+        List<Long> updatedItemIds = new ArrayList<>();
+
         for (long mediaId : alarm.media) {
-            expiringItems.add(adata.getLentItem(mediaId));
+            LentItem item = adata.getLentItem(mediaId);
+            if (item == null) {
+                if (BuildConfig.DEBUG) {
+                    throw new DataIntegrityException(
+                            "Unknown media ID " + mediaId + " in alarm with deadline " +
+                                    alarm.deadline.toString());
+                }
+            } else {
+                expiringItems.add(item);
+                updatedItemIds.add(mediaId);
+            }
         }
+
+        if (expiringItems.size() == 0) {
+            adata.removeAlarm(alarm);
+            return;
+        }
+
+        alarm.media = listToLongArray(updatedItemIds);
 
         String notificationText;
         String notificationTitle;
@@ -132,10 +146,10 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
 
 
         builder.setStyle(style).setSmallIcon(R.drawable.ic_stat_notification)
-                .setWhen(alarm.deadline.toDateTimeAtStartOfDay().getMillis())
-                .setNumber(expiringItems.size())
-                .setColor(context.getResources().getColor(R.color.primary_red)).setSound(null)
-                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE);
+               .setWhen(alarm.deadline.toDateTimeAtStartOfDay().getMillis())
+               .setNumber(expiringItems.size())
+               .setColor(context.getResources().getColor(R.color.primary_red)).setSound(null)
+               .setVisibility(NotificationCompat.VISIBILITY_PRIVATE);
 
         // Intent for when notification is deleted
         Intent deleteIntent = new Intent(context, ReminderBroadcastReceiver.class);
@@ -179,6 +193,15 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
         NotificationManager notificationManager = (NotificationManager) context
                 .getSystemService(Context.NOTIFICATION_SERVICE);
         notificationManager.notify((int) alarm.id, builder.build());
+
+        alarm.notified = true;
+        adata.updateAlarm(alarm);
+    }
+
+    private static long[] listToLongArray(List<Long> list) {
+        long[] array = new long[list.size()];
+        for (int i = 0; i < list.size(); i++) array[i] = list.get(i);
+        return array;
     }
 
     private void notificationDeleted() {
