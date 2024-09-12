@@ -22,6 +22,7 @@ public class SearchResultDetailActivity extends OpacActivity
 
     public static final String ARG_TOUCH_POSITION_X = "touchX";
     public static final String ARG_TOUCH_POSITION_Y = "touchY";
+
     SearchResultDetailFragment detailFragment;
 
     @Override
@@ -51,6 +52,18 @@ public class SearchResultDetailActivity extends OpacActivity
                         SearchResultDetailFragment.ARG_ITEM_ID,
                         getIntent().getStringExtra(
                                 SearchResultDetailFragment.ARG_ITEM_ID));
+            }
+            if (getIntent().hasExtra(
+                    SearchResultDetailFragment.ARG_ITEM_LIBRARY_IDENT)) {
+                arguments.putString(
+                        SearchResultDetailFragment.ARG_ITEM_LIBRARY_IDENT,
+                        getIntent().getStringExtra(
+                                SearchResultDetailFragment.ARG_ITEM_LIBRARY_IDENT));
+            } else {
+                arguments.putString(
+                        SearchResultDetailFragment.ARG_ITEM_LIBRARY_IDENT,
+                        app.getLibrary().getIdent()
+                );
             }
             if (getIntent().hasExtra(SearchResultDetailFragment.ARG_ITEM_COVER_BITMAP)) {
                 arguments.putParcelable(SearchResultDetailFragment.ARG_ITEM_COVER_BITMAP,

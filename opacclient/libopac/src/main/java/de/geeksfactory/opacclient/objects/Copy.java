@@ -23,14 +23,16 @@ import org.joda.time.format.DateTimeFormatter;
 import org.joda.time.format.ISODateTimeFormat;
 
 /**
- * Represents a copy of a medium ({@link DetailledItem}) available in a library.
+ * Represents a copy of a medium ({@link DetailedItem}) available in a library.
  */
 public class Copy {
     private String barcode;
     private String location;
     private String department;
     private String branch;
+    private String issue;
     private String status;
+    private SearchResult.Status statusCode;
     private LocalDate returnDate;
     private String reservations;
     private String shelfmark;
@@ -95,6 +97,20 @@ public class Copy {
     }
 
     /**
+     * @return The issue, e.g. when the item represents a year of magazines, this is the magazine number.
+     */
+    public String getIssue() {
+        return issue;
+    }
+
+    /**
+     * @param issue The issue, e.g. when the item represents a year of magazines, this is the magazine number.
+     */
+    public void setIssue(String issue) {
+        this.issue = issue;
+    }
+
+    /**
      * @return Current status of a copy ("lent", "free", ...). Should be set.
      */
     public String getStatus() {
@@ -106,6 +122,20 @@ public class Copy {
      */
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    /**
+     * @return Current status code of a copy or <code>null</code> if not set.
+     */
+    public SearchResult.Status getStatusCode() {
+        return statusCode;
+    }
+
+    /**
+     * @param statusCode Current status code of a copy.
+     */
+    public void setStatusCode(SearchResult.Status statusCode) {
+        this.statusCode = statusCode;
     }
 
     /**
@@ -153,7 +183,7 @@ public class Copy {
 
     /**
      * @return Reservation information for copy-based reservations. Intended for use in your {@link
-     * de.geeksfactory.opacclient.apis.OpacApi#reservation(DetailledItem, Account, int, String)}
+     * de.geeksfactory.opacclient.apis.OpacApi#reservation(DetailedItem, Account, int, String)}
      * implementation.
      */
     public String getResInfo() {
@@ -162,7 +192,7 @@ public class Copy {
 
     /**
      * @param resInfo Reservation information for copy-based reservations. Intended for use in your
-     *                {@link de.geeksfactory.opacclient.apis.OpacApi#reservation (DetailledItem,
+     *                {@link de.geeksfactory.opacclient.apis.OpacApi#reservation (DetailedItem,
      *                Account, int, String)} implementation.
      */
     public void setResInfo(String resInfo) {
@@ -226,6 +256,7 @@ public class Copy {
                 break;
             case "url":
                 setUrl(value);
+                break;
             default:
                 throw new IllegalArgumentException("key unknown");
         }
@@ -250,7 +281,9 @@ public class Copy {
      */
     public void set(String key, String value, DateTimeFormatter fmt) {
         if (key.equals("returndate")) {
-            setReturnDate(fmt.parseLocalDate(value));
+            if (!value.isEmpty()) {
+                setReturnDate(fmt.parseLocalDate(value));
+            }
         } else {
             set(key, value);
         }
@@ -281,7 +314,7 @@ public class Copy {
             case "status":
                 return getStatus();
             case "returndate":
-                return ISODateTimeFormat.date().print(getReturnDate());
+                return getReturnDate() != null ? ISODateTimeFormat.date().print(getReturnDate()) : null;
             case "reservations":
                 return getReservations();
             case "signature":
@@ -304,10 +337,30 @@ public class Copy {
                 || getDepartment() != null
                 || getBranch() != null
                 || getStatus() != null
+                || getStatusCode() != null
                 || getReturnDate() != null
                 || getReservations() != null
                 || getShelfmark() != null
                 || getResInfo() != null
+                || getIssue() != null
                 || getUrl() != null;
+    }
+
+    @Override
+    public String toString() {
+        return "Copy{" +
+                "barcode='" + barcode + '\'' +
+                ", location='" + location + '\'' +
+                ", department='" + department + '\'' +
+                ", branch='" + branch + '\'' +
+                ", status='" + status + '\'' +
+                ", statusCode='" + statusCode + '\'' +
+                ", returnDate=" + returnDate +
+                ", reservations='" + reservations + '\'' +
+                ", shelfmark='" + shelfmark + '\'' +
+                ", issue='" + issue + '\'' +
+                ", resInfo='" + resInfo + '\'' +
+                ", url='" + url + '\'' +
+                '}';
     }
 }

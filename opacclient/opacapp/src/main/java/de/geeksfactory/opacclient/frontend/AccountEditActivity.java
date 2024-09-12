@@ -27,42 +27,53 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
-import android.support.v4.app.ActivityCompat;
-import android.support.v7.app.AlertDialog;
-import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
-import android.util.Log;
+import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.view.animation.AnimationUtils;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.ProgressBar;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.TextView;
+
+import com.google.android.material.textfield.TextInputLayout;
 
 import org.json.JSONException;
 
 import java.io.IOException;
 import java.util.List;
 
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.app.ActivityCompat;
 import de.geeksfactory.opacclient.OpacClient;
 import de.geeksfactory.opacclient.R;
 import de.geeksfactory.opacclient.apis.OpacApi;
 import de.geeksfactory.opacclient.apis.OpacApi.OpacErrorException;
+import de.geeksfactory.opacclient.barcode.BarcodeScanIntegrator;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.Library;
+import de.geeksfactory.opacclient.reminder.ReminderHelper;
 import de.geeksfactory.opacclient.storage.AccountDataSource;
 import de.geeksfactory.opacclient.utils.ErrorReporter;
 
 public class AccountEditActivity extends AppCompatActivity {
 
     public static final String EXTRA_ACCOUNT_ID = "id";
+    public static final String EXTRA_EDITING = "editing";
 
     private Account account;
     private EditText etLabel;
     private EditText etName;
     private EditText etPassword;
+    private TextInputLayout tilPassword;
+    private TextInputLayout tilUsername;
+    private RadioGroup rgType;
     private Library lib;
 
     @SuppressWarnings("SameReturnValue") // Plus Edition compatibility
@@ -75,24 +86,28 @@ public class AccountEditActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(getLayoutResource());
 
-        setSupportActionBar((Toolbar) findViewById(R.id.toolbar));
+        setSupportActionBar(findViewById(R.id.toolbar));
         getSupportActionBar().setDisplayHomeAsUpEnabled(true);
 
-        etLabel = (EditText) findViewById(R.id.etLabel);
-        etName = (EditText) findViewById(R.id.etName);
-        etPassword = (EditText) findViewById(R.id.etPassword);
+        etLabel = findViewById(R.id.etLabel);
+        etName = findViewById(R.id.etName);
+        etPassword = findViewById(R.id.etPassword);
+        tilUsername = findViewById(R.id.tilUsername);
+        tilPassword = findViewById(R.id.tilPassword);
+        rgType = findViewById(R.id.rgType);
+
+        tilUsername.setEndIconOnClickListener(v -> {
+            BarcodeScanIntegrator integrator = new BarcodeScanIntegrator(AccountEditActivity.this);
+            integrator.initiateScan();
+        });
 
         AccountDataSource data = new AccountDataSource(this);
-        data.open();
-        account = data.getAccount(getIntent()
-                .getLongExtra(EXTRA_ACCOUNT_ID, -1));
+        account = data.getAccount(getIntent().getLongExtra(EXTRA_ACCOUNT_ID, -1));
 
         if (account == null) {
             finish();
             return;
         }
-
-        data.close();
 
         if (account.getLabel().equals(getString(R.string.default_account_name))) {
             etLabel.setText("");
@@ -102,50 +117,88 @@ public class AccountEditActivity extends AppCompatActivity {
         etName.setText(account.getName());
         etPassword.setText(account.getPassword());
 
+        etPassword.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+            @Override
+            public boolean onEditorAction(TextView textView, int i, KeyEvent keyEvent) {
+                saveAndCheck();
+                return false;
+            }
+        });
+
         try {
             lib = ((OpacClient) getApplication()).getLibrary(account
                     .getLibrary());
             if (findViewById(R.id.tvCity) != null) {
-                TextView tvCity = (TextView) findViewById(R.id.tvCity);
+                TextView tvCity = findViewById(R.id.tvCity);
                 tvCity.setText(lib.getDisplayName());
             }
 
-            if (lib.getReplacedBy() != null
-                    && findViewById(R.id.rlReplaced) != null) {
+            if (lib.getReplacedBy() != null && !"".equals(lib.getReplacedBy())
+                    && findViewById(R.id.rlReplaced) != null && ((OpacClient) getApplication()).promotePlusApps()) {
                 findViewById(R.id.rlReplaced).setVisibility(View.VISIBLE);
-                findViewById(R.id.ivReplacedStore).setOnClickListener(
+                findViewById(R.id.btnReplacedDownload).setOnClickListener(
                         new OnClickListener() {
                             @Override
                             public void onClick(View v) {
                                 try {
                                     Intent i = new Intent(Intent.ACTION_VIEW,
-                                            Uri.parse("market://details?id="
-                                                    + lib.getReplacedBy()));
+                                            Uri.parse(lib.getReplacedBy()
+                                                         .replace("https://play.google.com/store/apps/details?id=", "market://details?id=")));
                                     startActivity(i);
                                 } catch (ActivityNotFoundException e) {
-                                    Log.i("play", "no market installed");
+                                    Intent i = new Intent(Intent.ACTION_VIEW,
+                                            Uri.parse(lib.getReplacedBy()));
+                                    startActivity(i);
                                 }
                             }
                         });
             } else if (findViewById(R.id.rlReplaced) != null) {
                 findViewById(R.id.rlReplaced).setVisibility(View.GONE);
             }
-            try {
-                if (!lib.getData().getString("baseurl").contains("https")
-                        && findViewById(R.id.no_ssl) != null
-                        && lib.isAccountSupported()) {
-                    findViewById(R.id.no_ssl).setVisibility(View.VISIBLE);
-                } else if (findViewById(R.id.no_ssl) != null) {
-                    findViewById(R.id.no_ssl).setVisibility(View.GONE);
-                }
-            } catch (Exception e) {
-
-            }
+            refreshSslWarning();
         } catch (IOException e) {
             e.printStackTrace();
         } catch (JSONException e) {
             ErrorReporter.handleException(e);
             e.printStackTrace();
+        }
+
+        rgType.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(RadioGroup radioGroup, int i) {
+                if (i == R.id.rbAnonymous) {
+                    tilUsername.setVisibility(View.GONE);
+                    tilPassword.setVisibility(View.GONE);
+                } else if (i == R.id.rbWithCredentials) {
+                    tilUsername.setVisibility(View.VISIBLE);
+                    tilPassword.setVisibility(View.VISIBLE);
+                }
+                refreshSslWarning();
+            }
+        });
+        if ((account.getName() == null || account.getPassword() == null
+                || account.getName().equals("") || account.getPassword().equals(""))
+                &&
+                (getIntent().getBooleanExtra(EXTRA_EDITING, false) || !lib.isAccountSupported())) {
+            ((RadioButton) findViewById(R.id.rbAnonymous)).setChecked(true);
+        }
+
+        if (account.getPassword() == null || account.getPassword().equals("")) {
+            ((TextInputLayout) findViewById(R.id.tilPassword)).setEndIconMode(TextInputLayout.END_ICON_PASSWORD_TOGGLE);
+        } else {
+            ((TextInputLayout) findViewById(R.id.tilPassword)).setEndIconMode(TextInputLayout.END_ICON_NONE);
+        }
+
+    }
+
+    public void refreshSslWarning() {
+        if (lib != null && !lib.getData().optString("baseurl", "").contains("https")
+                && findViewById(R.id.no_ssl) != null
+                && lib.isAccountSupported()
+                && rgType.getCheckedRadioButtonId() == R.id.rbWithCredentials) {
+            findViewById(R.id.no_ssl).setVisibility(View.VISIBLE);
+        } else if (findViewById(R.id.no_ssl) != null) {
+            findViewById(R.id.no_ssl).setVisibility(View.GONE);
         }
     }
 
@@ -155,20 +208,45 @@ public class AccountEditActivity extends AppCompatActivity {
         } else {
             account.setLabel(etLabel.getText().toString().trim());
         }
-        account.setName(etName.getText().toString().trim());
-        account.setPassword(etPassword.getText().toString().trim());
-        if (etPassword.getText().toString().trim().equals("")) {
-            // Don't check user credentials if there are no credentials
+        if (rgType.getCheckedRadioButtonId() == R.id.rbWithCredentials) {
+            if (etPassword.getText().toString().trim().equals("")
+                    || etName.getText().toString().trim().equals("")) {
+                if (etPassword.getText().toString().trim().equals("")) {
+                    tilPassword.setErrorEnabled(true);
+                    tilPassword.setError(getString(R.string.please_enter_password));
+                } else {
+                    tilPassword.setErrorEnabled(false);
+                    tilPassword.setError(null);
+                }
+                if (etName.getText().toString().trim().equals("")) {
+                    tilUsername.setErrorEnabled(true);
+                    tilUsername.setError(getString(R.string.please_enter_username));
+                } else {
+                    tilUsername.setErrorEnabled(false);
+                    tilUsername.setError("");
+                }
+                return;
+            }
+
+            account.setName(etName.getText().toString().trim());
+            account.setPassword(etPassword.getText().toString().trim());
+            if (!lib.isAccountSupported()) {
+                // Don't check user credentials if the library does not support account features
+                save();
+                close();
+                return;
+            }
+            new CheckAccountDataTask().execute(account);
+        } else {
+            account.setName("");
+            account.setPassword("");
             save();
             close();
-            return;
         }
-        new CheckAccountDataTask().execute(account);
     }
 
     private void delete() {
         AccountDataSource data = new AccountDataSource(this);
-        data.open();
         data.remove(account);
 
         // Check whether he deleted account was selected
@@ -183,7 +261,27 @@ public class AccountEditActivity extends AppCompatActivity {
                         .get(0).getId());
             }
         }
-        data.close();
+        new ReminderHelper((OpacClient) getApplication()).generateAlarms();
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, Intent idata) {
+        super.onActivityResult(requestCode, resultCode, idata);
+
+        // Barcode
+        BarcodeScanIntegrator.ScanResult scanResult = BarcodeScanIntegrator
+                .parseActivityResult(requestCode, resultCode, idata);
+        if (resultCode != RESULT_CANCELED && scanResult != null) {
+            if (scanResult.getContents() == null) {
+                return;
+            } else if (scanResult.getContents().length() < 3) {
+                return;
+            } else {
+                etName.setText(scanResult.getContents());
+            }
+
+
+        }
     }
 
     @Override
@@ -255,9 +353,7 @@ public class AccountEditActivity extends AppCompatActivity {
 
     private void save() {
         AccountDataSource data = new AccountDataSource(AccountEditActivity.this);
-        data.open();
         data.update(account);
-        data.close();
         if (((OpacClient) getApplication()).getAccount().getId() == account
                 .getId()) {
             ((OpacClient) getApplication()).resetCache();
@@ -279,7 +375,7 @@ public class AccountEditActivity extends AppCompatActivity {
     }
 
     public void setProgress(boolean show, boolean animate) {
-        ProgressBar progress = (ProgressBar) findViewById(R.id.progressBar);
+        ProgressBar progress = findViewById(R.id.progressBar);
         View content = findViewById(R.id.svAccount);
 
         if (show) {
@@ -328,6 +424,8 @@ public class AccountEditActivity extends AppCompatActivity {
             } catch (JSONException e) {
                 return e;
             } catch (OpacErrorException e) {
+                return e;
+            } catch (OpacClient.LibraryRemovedException e) {
                 return e;
             }
             return null;

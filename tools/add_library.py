@@ -9,12 +9,14 @@ import urllib.error
 from bs4 import BeautifulSoup
 
 LIBDIR = 'opacclient/opacapp/src/main/assets/bibs/'
+API_KEY_FILE = 'googlemaps_api_key.txt'
 TYPES = [
         'NONE', 'BOOK', 'CD', 'CD_SOFTWARE', 'CD_MUSIC', 'DVD', 'MOVIE', 'AUDIOBOOK', 'PACKAGE',
         'GAME_CONSOLE', 'EBOOK', 'SCORE_MUSIC', 'PACKAGE_BOOKS', 'UNKNOWN', 'NEWSPAPER',
         'BOARDGAME', 'SCHOOL_VERSION', 'MAP', 'BLURAY', 'AUDIO_CASSETTE', 'ART', 'MAGAZINE',
         'GAME_CONSOLE_WII', 'GAME_CONSOLE_NINTENDO', 'GAME_CONSOLE_PLAYSTATION',
-        'GAME_CONSOLE_XBOX', 'LP_RECORD', 'MP3', 'URL', 'EVIDEO','EDOC','EAUDIO']
+        'GAME_CONSOLE_XBOX', 'LP_RECORD', 'MP3', 'URL', 'EVIDEO','EDOC','EAUDIO',
+        'DEVICE', 'MICROFORM']
 
 
 def getInput(required=False, default=None):
@@ -32,28 +34,41 @@ def getInput(required=False, default=None):
     return inp
 
 
-def loadGeoPossibilities(data):
+def loadGeoPossibilities(data, api_key=None):
     possibilities = []
 
-    for address in ('%s, %s, %s' % (data['title'], data['city'], data['state']),
-                    '%s, %s, %s' % ('Bibliothek', data['city'], data['state']),
-                    data['city']):
-        uri = 'https://maps.googleapis.com/maps/api/geocode/json?' + \
-            urllib.parse.urlencode({'address': address, 'sensor': 'true'})
-        jsoncontent = urllib.request.urlopen(uri).read().decode()
-        geocode = json.loads(jsoncontent)
+    if api_key:
+        for address in ('%s, %s, %s' % (data['title'], data['city'], data['state']),
+                        '%s, %s, %s' % ('Bibliothek', data['city'], data['state']),
+                        data['city']):
+            uri = f'https://maps.googleapis.com/maps/api/geocode/json?key={api_key}&' + \
+                urllib.parse.urlencode({'address': address, 'sensor': 'true'})
+            jsoncontent = urllib.request.urlopen(uri).read().decode()
+            geocode = json.loads(jsoncontent)
 
-        if geocode['status'] != 'OK':
-            print("ERROR!")
+            if geocode['status'] != 'OK':
+                print("ERROR!")
 
-        for res in geocode['results']:
-            possibilities.append(
-                    (
-                        ", ".join([a["long_name"] for a in res['address_components']]),
-                        [float(res['geometry']['location']['lat']), float(
-                            res['geometry']['location']['lng'])]
+            for res in geocode['results']:
+                possibilities.append(
+                        (
+                            ", ".join([a["long_name"] for a in res['address_components']]),
+                            [float(res['geometry']['location']['lat']), float(
+                                res['geometry']['location']['lng'])]
+                        )
                     )
-                )
+    else:
+        api_url = 'https://nominatim.openstreetmap.org/search'
+        query = 'format=json&polygon=0&addressdetails=0&limit=40'
+        parameters1 = urllib.parse.quote(','.join((data['title'], data['city'].partition('(')[0],
+                                                   data['state'],data['country'])), safe=',')
+        parameters2 = urllib.parse.urlencode({'country': data['country'], 'state': data['state'],
+                                              'city': data['city'].partition('(')[0]})
+        for uri in (f'{api_url}/{parameters1}?{query}',
+                    f'{api_url}?{query}&amenity=library&{parameters2}'):
+            jsoncontent = urllib.request.urlopen(uri).read().decode()
+            for p in json.loads(jsoncontent):
+                possibilities.append((p["display_name"], [float(p['lat']), float(p['lon'])]))
 
     return possibilities
 
@@ -315,6 +330,11 @@ class IOpac(Api):
     def accountSupported(self):
         return True
 
+class Littera(Api):
+
+    def accountSupported(self):
+        return False
+
 class Open(Api):
 
     def accountSupported(self):
@@ -323,15 +343,18 @@ class Open(Api):
     def prompt(self, data):
         data['data']['urls'] = {}
         baseurl = data['data']['baseurl'] + '/'
-        html = urllib.request.urlopen(baseurl).read().decode('utf-8')
-        doc = BeautifulSoup(html, 'html.parser')
-        elems = doc.select('#dnn_dnnNAV_ctldnnNAV li a')
-        for elem in elems:
-            name = elem.get_text()
-            if name in ('Einfache Suche'):
-                data['data']['urls']['simple_search'] = elem['href'].replace(baseurl, '')
-            elif name in ('Erweiterte Suche', 'Profisuche'):
-                data['data']['urls']['advanced_search'] = elem['href'].replace(baseurl, '')
+        try:
+            html = urllib.request.urlopen(baseurl).read().decode('utf-8')
+            doc = BeautifulSoup(html, 'html.parser')
+            elems = doc.select('#dnn_dnnNAV_ctldnnNAV li a')
+            for elem in elems:
+                name = elem.get_text()
+                if name in ('Einfache Suche'):
+                    data['data']['urls']['simple_search'] = elem['href'].replace(baseurl, '')
+                elif name in ('Erweiterte Suche', 'Profisuche'):
+                    data['data']['urls']['advanced_search'] = elem['href'].replace(baseurl, '')
+        except urllib.error.HTTPError:
+            pass
 
         if not 'simple_search' in data['data']['urls']:
             print("URL für Einfache Suche?")
@@ -357,7 +380,8 @@ APIS = {
 	'winbiap'	  : WinBiap,
     'vufind'      : VuFind,
     'primo'       : Primo,
-    'open'        : Open
+    'open'        : Open,
+    'web-opac.at' : Littera,
 }
 
 data = {}
@@ -389,8 +413,14 @@ if __name__ == '__main__':
     data['title'] = getInput(default="Stadtbibliothek")
 
     print("Lade Geodaten...")
+    try:
+        with open(os.path.join(os.path.dirname(__file__), API_KEY_FILE)) as f:
+            api_key = f.read().strip()
+    except:
+        print(f'Keine Google Maps API key Datei ({API_KEY_FILE}) gefunden, verwende OSM Nominatim.')
+        api_key = None
 
-    geo = loadGeoPossibilities(data)
+    geo = loadGeoPossibilities(data, api_key)
     for k, g in enumerate(geo):
         print("[%d]    %s" % (k + 1, g[0]))
 

@@ -18,11 +18,7 @@
  */
 package de.geeksfactory.opacclient.apis;
 
-import org.apache.http.HttpResponse;
-import org.apache.http.NameValuePair;
-import org.apache.http.client.entity.UrlEncodedFormEntity;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.message.BasicNameValuePair;
+import org.joda.time.DateTime;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 import org.json.JSONArray;
@@ -34,9 +30,9 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import java.io.IOException;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -46,13 +42,12 @@ import java.util.regex.Pattern;
 
 import de.geeksfactory.opacclient.i18n.StringProvider;
 import de.geeksfactory.opacclient.networking.HttpClientFactory;
-import de.geeksfactory.opacclient.networking.HttpUtils;
 import de.geeksfactory.opacclient.networking.NotReachableException;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Filter.Option;
 import de.geeksfactory.opacclient.objects.LentItem;
@@ -62,16 +57,19 @@ import de.geeksfactory.opacclient.objects.SearchRequestResult;
 import de.geeksfactory.opacclient.objects.SearchResult;
 import de.geeksfactory.opacclient.objects.SearchResult.MediaType;
 import de.geeksfactory.opacclient.objects.SearchResult.Status;
+import de.geeksfactory.opacclient.reporting.Report;
+import de.geeksfactory.opacclient.reporting.ReportHandler;
 import de.geeksfactory.opacclient.searchfields.BarcodeSearchField;
 import de.geeksfactory.opacclient.searchfields.DropdownSearchField;
 import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 import de.geeksfactory.opacclient.searchfields.TextSearchField;
+import okhttp3.FormBody;
 
 /**
  * @author Ruediger Wurth
  */
-public class BiBer1992 extends BaseApi {
+public class BiBer1992 extends OkHttpBaseApi {
 
     protected static HashMap<String, MediaType> defaulttypes = new HashMap<>();
 
@@ -82,6 +80,7 @@ public class BiBer1992 extends BaseApi {
     // number of results is always 50 which is too much
     final private int numOfResultsPerPage = 20;
     protected boolean newStyleReservations = false;
+    protected boolean reservationsId1First = false;
     private String opacUrl = "";
     private String opacDir = "opac"; // sometimes also "opax"
     private String opacSuffix = ".C"; // sometimes also ".S"
@@ -90,7 +89,19 @@ public class BiBer1992 extends BaseApi {
     // private int m_resultcount = 10;
     // private long logged_in;
     // private Account logged_in_as;
-    private List<NameValuePair> nameValuePairs = new ArrayList<>(2);
+    List<String[]> formData = new ArrayList<>();
+
+    private void addFormData(String k, String v) {
+        formData.add(new String[] {k, v});
+    }
+
+    private FormBody buildFormData() {
+        FormBody.Builder fb = new FormBody.Builder(Charset.forName(getDefaultEncoding()));
+        for (String[] li : formData) {
+            fb.add(li[0], li[1]);
+        }
+        return fb.build();
+    }
 
     /*
      * ----- media types ----- Example Wuerzburg: <td ...><input type="checkbox"
@@ -119,26 +130,15 @@ public class BiBer1992 extends BaseApi {
      * <option selected value="ZWST0">Alle Bibliotheksorte</option> </select>
      */
     @Override
-    public List<SearchField> getSearchFields() throws IOException {
+    public List<SearchField> parseSearchFields() throws IOException {
         List<SearchField> fields = new ArrayList<>();
 
-        HttpGet httpget;
+        String html;
         if (opacDir.contains("opax")) {
-            httpget = new HttpGet(opacUrl + "/" + opacDir
-                    + "/de/qsel.html.S");
+            html = httpGet(opacUrl + "/" + opacDir + "/de/qsel.html.S", getDefaultEncoding());
         } else {
-            httpget = new HttpGet(opacUrl + "/" + opacDir
-                    + "/de/qsel_main.S");
+            html= httpGet(opacUrl + "/" + opacDir + "/de/qsel_main.S", getDefaultEncoding());
         }
-
-        HttpResponse response = http_client.execute(httpget);
-
-        if (response.getStatusLine().getStatusCode() == 500) {
-            throw new NotReachableException(response.getStatusLine().getReasonPhrase());
-        }
-        String html = convertStreamToString(response.getEntity().getContent());
-        HttpUtils.consume(response.getEntity());
-
         Document doc = Jsoup.parse(html);
 
         // get text fields
@@ -224,33 +224,50 @@ public class BiBer1992 extends BaseApi {
             fields.add(brDropdown);
         }
 
+        Elements sort_opts = doc.select("form select[name=SORTX] option");
+        if (sort_opts.size() > 0) {
+            DropdownSearchField sortDropdown = new DropdownSearchField();
+            sortDropdown.setId(sort_opts.get(0).parent().attr("name"));
+            sortDropdown.setDisplayName(sort_opts.get(0).parent().parent()
+                                                 .previousElementSibling().text()
+                                                 .replace("\u00a0", "")
+                                                 .replace("?", "").trim());
+            for (Element opt : sort_opts) {
+                sortDropdown.addDropdownValue(opt.val(), opt.text());
+            }
+            fields.add(sortDropdown);
+        }
+
         return fields;
     }
 
-    private void setMediaTypeFromImageFilename(SearchResult sr, String imagename) {
+    private static MediaType getMediaTypeFromImageFilename(SearchResult sr, String imagename,
+            JSONObject data) {
         String[] fparts1 = imagename.split("/"); // "images/31.gif.S"
         String[] fparts2 = fparts1[fparts1.length - 1].split("\\."); // "31.gif.S"
         String lookup = fparts2[0]; // "31"
 
         if (imagename.contains("amazon")) {
-            sr.setCover(imagename);
+            if (sr != null) sr.setCover(imagename);
+            return null;
         }
 
         if (data.has("mediatypes")) {
             try {
                 String typeStr = data.getJSONObject("mediatypes").getString(
                         lookup);
-                sr.setType(MediaType.valueOf(typeStr));
+                return MediaType.valueOf(typeStr);
             } catch (Exception e) {
                 if (defaulttypes.containsKey(lookup)) {
-                    sr.setType(defaulttypes.get(lookup));
+                    return defaulttypes.get(lookup);
                 }
             }
         } else {
             if (defaulttypes.containsKey(lookup)) {
-                sr.setType(defaulttypes.get(lookup));
+                return defaulttypes.get(lookup);
             }
         }
+        return null;
     }
 
     /*
@@ -282,8 +299,8 @@ public class BiBer1992 extends BaseApi {
     }
 
     @Override
-    public void init(Library lib, HttpClientFactory httpClientFactory) {
-        super.init(lib, httpClientFactory);
+    public void init(Library lib, HttpClientFactory httpClientFactory, boolean debug) {
+        super.init(lib, httpClientFactory, debug);
 
         data = lib.getData();
 
@@ -305,32 +322,26 @@ public class BiBer1992 extends BaseApi {
             start();
         }
 
-        nameValuePairs.clear();
+        formData.clear();
         int count = 1;
         for (SearchQuery query : queryList) {
             if ((query.getSearchField() instanceof TextSearchField || query
                     .getSearchField() instanceof BarcodeSearchField)
                     && !query.getValue().equals("")) {
-                nameValuePairs.add(new BasicNameValuePair("CNN" + count,
-                        "AND"));
-                nameValuePairs.add(new BasicNameValuePair("FLD" + count,
-                        query.getValue()));
-                nameValuePairs.add(new BasicNameValuePair("REG" + count,
-                        query.getKey()));
+                addFormData("CNN" + count, "AND");
+                addFormData("FLD" + count, query.getValue());
+                addFormData("REG" + count, query.getKey());
                 count++;
             } else if (query.getSearchField() instanceof DropdownSearchField) {
-                nameValuePairs.add(new BasicNameValuePair(query.getKey(),
-                        query.getValue()));
+                addFormData(query.getKey(), query.getValue());
             }
         }
 
-        nameValuePairs.add(new BasicNameValuePair("FUNC", "qsel"));
-        nameValuePairs.add(new BasicNameValuePair("LANG", "de"));
-        nameValuePairs.add(new BasicNameValuePair("SHOW", "20")); // but
-        // result
-        // gives 50
-        nameValuePairs.add(new BasicNameValuePair("SHOWSTAT", "N"));
-        nameValuePairs.add(new BasicNameValuePair("FROMPOS", "1"));
+        addFormData("FUNC", "qsel");
+        addFormData("LANG", "de");
+        addFormData("SHOW", "20"); // but result gives 50
+        addFormData("SHOWSTAT", "N");
+        addFormData("FROMPOS", "1");
 
         return searchGetPage(1);
     }
@@ -346,13 +357,12 @@ public class BiBer1992 extends BaseApi {
         int startNum = (page - 1) * numOfResultsPerPage + 1;
 
         // remove last element = "FROMPOS", and add a new one
-        nameValuePairs.remove(nameValuePairs.size() - 1);
-        nameValuePairs.add(new BasicNameValuePair("FROMPOS", String
-                .valueOf(startNum)));
+
+        formData.remove(formData.size() - 1);
+        addFormData("FROMPOS", String.valueOf(startNum));
 
         String html = httpPost(opacUrl + "/" + opacDir + "/query" + opacSuffix,
-                new UrlEncodedFormEntity(nameValuePairs),
-                getDefaultEncoding());
+                buildFormData(), getDefaultEncoding());
         return parse_search(html, page);
     }
 
@@ -378,6 +388,9 @@ public class BiBer1992 extends BaseApi {
 
         Elements trList = doc.select("form table tr[valign]"); // <tr
         // valign="top">
+        if (trList.size() == 0) { // Schwieberdingen
+            trList = doc.select("table:has(input[type=checkbox]) tr");
+        }
         Elements elem;
         int rows_per_hit = 2;
         if (trList.size() == 1
@@ -416,7 +429,9 @@ public class BiBer1992 extends BaseApi {
 
             // ID as href tag
             elem = tr.select("td a");
-            if (elem.size() > 0) {
+            if (elem.size() > 0 && !elem.get(0).attr("href").contains("ISBN")) {
+                // Exclude the cover links in Ludwigsburg as they lead to a page that misses the
+                // reservation button
                 String hrefID = elem.get(0).attr("href");
                 sr.setId(hrefID);
             } else {
@@ -433,7 +448,7 @@ public class BiBer1992 extends BaseApi {
             // media type
             elem = tr.select("td img");
             if (elem.size() > 0) {
-                setMediaTypeFromImageFilename(sr, elem.get(0).attr("src"));
+                sr.setType(getMediaTypeFromImageFilename(sr, elem.get(0).attr("src"), data));
             }
 
             // description
@@ -461,6 +476,14 @@ public class BiBer1992 extends BaseApi {
             // needed for Friedrichshafen: "Warenkorb", "Vormerkung"
             // Herford: "Medienkorb"
             desc = desc.replaceAll("<a .*?</a>", "");
+            // remove newlines (useless in HTML)
+            desc = desc.replaceAll("\\n", "");
+            // remove hidden divs ("Titel übernommen!" in Wuerzburg)
+            desc = desc.replaceAll("<div[^>]*style=\"display:none\">.*</div>", "");
+            // remove all invalid HTML tags
+            desc = desc.replaceAll("</?(tr|td|font|table|tbody|div)[^>]*>", "");
+            // replace multiple line breaks by one
+            desc = desc.replaceAll("(<br( /)?>\\s*)+", "<br>");
             sr.setInnerhtml(desc);
 
             if (tr.select("font.p04x09b").size() > 0
@@ -490,7 +513,7 @@ public class BiBer1992 extends BaseApi {
      * OpacApi#getResultById(java.lang.String)
      */
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException {
         if (!initialised) {
             start();
@@ -510,13 +533,7 @@ public class BiBer1992 extends BaseApi {
         }
 
 
-        HttpGet httpget = new HttpGet(opacUrl + id);
-
-        HttpResponse response = http_client.execute(httpget);
-
-        String html = convertStreamToString(response.getEntity().getContent());
-        HttpUtils.consume(response.getEntity());
-
+        String html = httpGet(opacUrl + id, getDefaultEncoding());
         return parse_result(html);
     }
 
@@ -526,7 +543,7 @@ public class BiBer1992 extends BaseApi {
      * @see OpacApi#getResult(int)
      */
     @Override
-    public DetailledItem getResult(int position) throws IOException {
+    public DetailedItem getResult(int position) throws IOException {
         // not needed, normall all search results should have an ID,
         // so getResultById() is called
         return null;
@@ -549,8 +566,8 @@ public class BiBer1992 extends BaseApi {
      * Content | Content | Content | Content |
      * |-------------------------------------------------|
      */
-    private DetailledItem parse_result(String html) {
-        DetailledItem item = new DetailledItem();
+    private DetailedItem parse_result(String html) {
+        DetailedItem item = new DetailedItem();
 
         Document document = Jsoup.parse(html);
 
@@ -720,7 +737,7 @@ public class BiBer1992 extends BaseApi {
      * de.geeksfactory.opacclient.objects.Account, int, java.lang.String)
      */
     @Override
-    public ReservationResult reservation(DetailledItem item, Account account,
+    public ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException {
         String resinfo = item.getReservation_info();
         if (selection == null || selection.equals("confirmed")) {
@@ -740,6 +757,18 @@ public class BiBer1992 extends BaseApi {
             newStyleReservations = doc
                     .select("input[name=" + resinfo.replace("resF_", "") + "]")
                     .val().length() > 4;
+
+            for (Element input : doc.select("input, select")) {
+                if ("ID1".equals(input.attr("name"))) {
+                    reservationsId1First = true;
+                    break;
+                } else if ("FUNC".equals(input.attr("name")) ||
+                        "vors".equals(input.attr("value"))) {
+                    reservationsId1First = false;
+                    break;
+                }
+            }
+
             Elements optionsElements = doc.select("select[name=ID1] option");
             if (optionsElements.size() > 0) {
                 List<Map<String, String>> options = new ArrayList<>();
@@ -769,29 +798,28 @@ public class BiBer1992 extends BaseApi {
             }
         } else {
             // STEP 2: Reserve
-            List<NameValuePair> nameValuePairs = new ArrayList<>();
-            nameValuePairs.add(new BasicNameValuePair("LANG", "de"));
-            nameValuePairs.add(new BasicNameValuePair("BENUTZER", account
-                    .getName()));
-            nameValuePairs.add(new BasicNameValuePair("PASSWORD", account
-                    .getPassword()));
-            nameValuePairs.add(new BasicNameValuePair("FUNC", "vors"));
+            FormBody.Builder formData = new FormBody.Builder(Charset.forName(getDefaultEncoding()));
+            formData.add("LANG", "de");
+            formData.add("BENUTZER", account.getName());
+            formData.add("PASSWORD", account.getPassword());
+            if (reservationsId1First) formData.add("ID1", selection.split(":")[0]);
+            formData.add("FUNC", "vors");
             if (opacDir.contains("opax")) {
-                nameValuePairs.add(new BasicNameValuePair(resinfo.replace(
+                formData.add(resinfo.replace(
                         "resF_", ""), "vors"
                         + (newStyleReservations ? resinfo.replace("resF_", "")
-                        : "")));
+                        : ""));
             }
             if (newStyleReservations) {
-                nameValuePairs.add(new BasicNameValuePair("ID11", selection
-                        .split(":")[1]));
+                formData.addEncoded("ID11", selection.split(":")[1]);
             }
-            nameValuePairs.add(new BasicNameValuePair("ID1", selection
-                    .split(":")[0]));
+            if (!reservationsId1First) formData.add("ID1", selection.split(":")[0]);
 
-            String html = httpPost(opacUrl + "/" + opacDir
-                            + "/setreserv" + opacSuffix, new UrlEncodedFormEntity(nameValuePairs),
-                    getDefaultEncoding());
+            String html = httpPost(
+                    opacUrl + "/" + opacDir + "/setreserv" + opacSuffix,
+                    formData.build(),
+                    getDefaultEncoding()
+            );
 
             Document doc = Jsoup.parse(html);
             if (doc.select(".tab21 .p44b, .p2").text().contains("eingetragen")) {
@@ -839,21 +867,19 @@ public class BiBer1992 extends BaseApi {
             command = "/verl" + opacSuffix;
         }
 
-        List<NameValuePair> nameValuePairs = new ArrayList<>(2);
-        nameValuePairs.add(new BasicNameValuePair(media, "YES"));
-        nameValuePairs
-                .add(new BasicNameValuePair("BENUTZER", account.getName()));
-        nameValuePairs.add(new BasicNameValuePair("FUNC", "verl"));
-        nameValuePairs.add(new BasicNameValuePair("LANG", "de"));
-        nameValuePairs.add(new BasicNameValuePair("PASSWORD", account
-                .getPassword()));
+        FormBody.Builder formData = new FormBody.Builder(Charset.forName(getDefaultEncoding()));
+        formData.add(media, "YES");
+        formData.add("BENUTZER", account.getName());
+        formData.add("FUNC", "verl");
+        formData.add("LANG", "de");
+        formData.add("PASSWORD", account.getPassword());
 
         String html = httpPost(opacUrl + "/" + opacDir + command,
-                new UrlEncodedFormEntity(nameValuePairs), getDefaultEncoding());
+                formData.build(), getDefaultEncoding());
         if (html.contains("no such key")) {
             html = httpPost(
                     opacUrl + "/" + opacDir + command.replace(".C", ".S"),
-                    new UrlEncodedFormEntity(nameValuePairs),
+                    formData.build(),
                     getDefaultEncoding());
         }
 
@@ -913,22 +939,20 @@ public class BiBer1992 extends BaseApi {
     @Override
     public CancelResult cancel(String media, Account account, int useraction,
             String selection) throws IOException, OpacErrorException {
-        List<NameValuePair> nameValuePairs = new ArrayList<>();
-        nameValuePairs.add(new BasicNameValuePair("LANG", "de"));
-        nameValuePairs.add(new BasicNameValuePair("FUNC", "vorl"));
+        FormBody.Builder formData = new FormBody.Builder(Charset.forName(getDefaultEncoding()));
+        formData.add("LANG", "de");
+        formData.add("FUNC", "vorl");
         if (opacDir.contains("opax")) {
-            nameValuePairs.add(new BasicNameValuePair("BENUTZER", account
-                    .getName()));
-            nameValuePairs.add(new BasicNameValuePair("PASSWORD", account
-                    .getPassword()));
+            formData.add("BENUTZER", account.getName());
+            formData.add("PASSWORD", account.getPassword());
         }
-        nameValuePairs.add(new BasicNameValuePair(media, "YES"));
+        formData.add(media, "YES");
 
         String action =
                 opacDir.contains("opax") ? "/delreserv" + opacSuffix : "/vorml" + opacSuffix;
 
         String html = httpPost(opacUrl + "/" + opacDir + action,
-                new UrlEncodedFormEntity(nameValuePairs), getDefaultEncoding());
+                formData.build(), getDefaultEncoding());
 
         Document doc = Jsoup.parse(html);
         if (doc.select(".tab21 .p44b, .p2").text().contains("Vormerkung wurde")) {
@@ -969,18 +993,64 @@ public class BiBer1992 extends BaseApi {
         // get media list via http POST
         Document doc = accountHttpPost(account, "medk");
 
-        return parseMediaList(res, doc, data);
+        return parseMediaList(res, account, doc, data, reportHandler,
+                loadJsonResource("/biber1992/headers_lent.json"));
     }
 
-    static List<LentItem> parseMediaList(AccountData res, Document doc,
-            JSONObject data) throws JSONException {
+    static List<LentItem> parseMediaList(AccountData res, Account account, Document doc,
+            JSONObject data, ReportHandler reportHandler, JSONObject headers_lent)
+            throws JSONException {
         List<LentItem> media = new ArrayList<>();
         if (doc == null) {
             return media;
         }
 
+        if (doc.select("form[name=medkl] table").size() == 0){
+            return new ArrayList<LentItem>();
+        }
+
         // parse result list
-        JSONObject copymap = data.getJSONObject("accounttable");
+        Map<String, Integer> copymap = new HashMap<>();
+        Map<String, Integer> colspanmap = new HashMap<>();
+        Elements headerCells = doc.select("form[name=medkl] table tr:has(th)").last().select("th");
+        JSONArray headersList = new JSONArray();
+        JSONArray unknownHeaders = new JSONArray();
+        int j = 0;
+        for (Element headerCell : headerCells) {
+            String header = headerCell.text();
+
+            String colspan_str = headerCell.attr("colspan");
+            int colspan = 1;
+            if (!colspan_str.equals("")) {
+                colspan = Integer.valueOf(colspan_str);
+            }
+
+            headersList.put(header);
+            if (headers_lent.has(header)) {
+                if (!headers_lent.isNull(header)) {
+                    copymap.put(headers_lent.getString(header), j);
+                    colspanmap.put(headers_lent.getString(header), colspan);
+                }
+            } else {
+                unknownHeaders.put(header);
+            }
+
+            j += colspan;
+        }
+
+        if (unknownHeaders.length() > 0) {
+            // send report
+            JSONObject reportData = new JSONObject();
+            reportData.put("headers", headersList);
+            reportData.put("unknown_headers", unknownHeaders);
+            Report report = new Report(account.getLibrary(), "biber1992", "unknown header - lent",
+                    DateTime.now(), reportData);
+            reportHandler.sendReport(report);
+
+            // fallback to JSON
+            JSONObject accounttable = data.getJSONObject("accounttable");
+            copymap = jsonToMap(accounttable);
+        }
 
         Pattern expire = Pattern.compile("Ausweisg.ltigkeit: ([0-9.]+)");
         Pattern fees = Pattern.compile("([0-9,.]+) .");
@@ -1003,45 +1073,57 @@ public class BiBer1992 extends BaseApi {
             }
             LentItem item = new LentItem();
 
+            Elements mediatypeImg = tr.select("td img");
+            if (mediatypeImg.size() > 0) {
+                item.setMediaType(getMediaTypeFromImageFilename(
+                        null, mediatypeImg.get(0).attr("src"), data));
+            }
+
             Pattern itemIdPat = Pattern
-                    .compile("javascript:smAcc\\('[a-z]+','[a-z]+','([A-Za-z0-9]+)'\\)");
+                    .compile("javascript:(?:smAcc|smMedk)\\('[a-z]+','[a-z]+','([A-Za-z0-9]+)'\\)");
             // columns: all elements of one media
-            Iterator<?> keys = copymap.keys();
-            while (keys.hasNext()) {
-                String key = (String) keys.next();
-                int index;
-                try {
-                    index = copymap.has(key) ? copymap.getInt(key) : -1;
-                } catch (JSONException e1) {
-                    index = -1;
+            for (Map.Entry<String, Integer> entry : copymap.entrySet()) {
+                String key = entry.getKey();
+                int index = entry.getValue();
+                if (tr.child(index).select("a").size() == 1) {
+                    Matcher matcher = itemIdPat.matcher(tr.child(index)
+                                                          .select("a").attr("href"));
+                    if (matcher.find()) item.setId(matcher.group(1));
                 }
-                if (index >= 0) {
-                    String value = tr.child(index).text().trim();
 
-                    switch (key) {
-                        case "author":
-                            value = findTitleAndAuthor(value)[1];
-                            break;
-                        case "title":
-                            value = findTitleAndAuthor(value)[0];
-                            break;
-                        case "returndate":
-                            try {
-                                value = fmt.parseLocalDate(value).toString();
-                            } catch (IllegalArgumentException e1) {
-                                e1.printStackTrace();
+                String value = tr.child(index).text().trim().replace("\u00A0", "");
+                if (colspanmap.get(key) > 1) {
+                    for (int k = 1; k < colspanmap.get(key); k++) {
+                        value = value + " " + tr.child(index + k).text().trim().replace("\u00A0", "");
+                    }
+                    value = value.trim();
+                }
+
+                switch (key) {
+                    case "author+title":
+                        item.setTitle(findTitleAndAuthor(value)[0]);
+                        item.setAuthor(findTitleAndAuthor(value)[1]);
+                        continue;
+                    case "returndate":
+                        try {
+                            value = fmt.parseLocalDate(value).toString();
+                        } catch (IllegalArgumentException e1) {
+                            e1.printStackTrace();
+                        }
+                        break;
+                    case "renewals_number":
+                    case "status":
+                        if (value != null && value.length() != 0) {
+                            if (item.getStatus() == null) {
+                                item.setStatus(value);
+                            } else {
+                                item.setStatus(item.getStatus() + ", " + value);
                             }
-                            break;
-                    }
-
-                    if (tr.child(index).select("a").size() == 1) {
-                        Matcher matcher = itemIdPat.matcher(tr.child(index)
-                                                              .select("a").attr("href"));
-                        if (matcher.find()) item.setId(matcher.group(1));
-                    }
-
-                    if (value != null && value.length() != 0) item.set(key, value);
+                        }
+                        continue;
                 }
+
+                if (value != null && value.length() != 0) item.set(key, value);
             }
 
             if (tr.select("input[type=checkbox][value=YES]").size() > 0) {
@@ -1058,31 +1140,69 @@ public class BiBer1992 extends BaseApi {
         // get reservations list via http POST
         Document doc = accountHttpPost(account, "vorm");
 
-        return parseResList(doc, data);
+        return parseResList(account, doc, data, reportHandler,
+                loadJsonResource("/biber1992/headers_reservations.json"));
     }
 
-    static List<ReservedItem> parseResList(Document doc, JSONObject data)
+    static List<ReservedItem> parseResList(Account account, Document doc, JSONObject data,
+            ReportHandler reportHandler, JSONObject headers_reservations)
             throws JSONException {
         List<ReservedItem> reservations = new ArrayList<>();
         if (doc == null) {
             // error message as html result
             return reservations;
         }
+        if (doc.select("form[name=vorml] table").size() == 0){
+            return new ArrayList<ReservedItem>();
+        }
 
         // parse result list
-        JSONObject copymap;
-        if (!data.has("reservationtable")) {
-            // reservations not specifically supported, let's just try it
-            // with default values but fail silently
-            copymap = new JSONObject();
-            copymap.put("author", 3);
-            copymap.put("availability", 6);
-            copymap.put("branch", -1);
-            copymap.put("cancelurl", -1);
-            copymap.put("expirationdate", 5);
-            copymap.put("title", 3);
-        } else {
-            copymap = data.getJSONObject("reservationtable");
+        Map<String, Integer> copymap = new HashMap<>();
+        Elements headerCells = doc.select("form[name=vorml] table tr:has(th)").last().select("th");
+        JSONArray headersList = new JSONArray();
+        JSONArray unknownHeaders = new JSONArray();
+        int j = 0;
+        for (Element headerCell : headerCells) {
+            String header = headerCell.text();
+            headersList.put(header);
+            if (headers_reservations.has(header)) {
+                if (!headers_reservations.isNull(header)) {
+                    copymap.put(headers_reservations.getString(header), j);
+                }
+            } else {
+                unknownHeaders.put(header);
+            }
+
+            String colspan = headerCell.attr("colspan");
+            j += !colspan.equals("") ? Integer.valueOf(colspan) : 1;
+        }
+
+        if (unknownHeaders.length() > 0) {
+            // send report
+            JSONObject reportData = new JSONObject();
+            reportData.put("headers", headersList);
+            reportData.put("unknown_headers", unknownHeaders);
+            Report report =
+                    new Report(account.getLibrary(), "biber1992", "unknown header - reservations",
+                            DateTime.now(), reportData);
+            reportHandler.sendReport(report);
+
+            // fallback to JSON
+            JSONObject reservationtable;
+            if (data.has("reservationtable")) {
+                reservationtable = data.getJSONObject("reservationtable");
+            } else {
+                // reservations not specifically supported, let's just try it
+                // with default values but fail silently
+                reservationtable = new JSONObject();
+                reservationtable.put("author", 3);
+                reservationtable.put("availability", 6);
+                reservationtable.put("branch", -1);
+                reservationtable.put("cancelurl", -1);
+                reservationtable.put("expirationdate", 5);
+                reservationtable.put("title", 3);
+            }
+            copymap = jsonToMap(reservationtable);
         }
 
         DateTimeFormatter fmt = DateTimeFormat.forPattern("dd.MM.yyyy").withLocale(Locale.GERMAN);
@@ -1098,41 +1218,41 @@ public class BiBer1992 extends BaseApi {
 
             item.setCancelData(tr.select("input[type=checkbox]").attr("name"));
 
+            Elements mediatypeImg = tr.select("td img");
+            if (mediatypeImg.size() > 0) {
+                item.setMediaType(getMediaTypeFromImageFilename(
+                        null, mediatypeImg.get(0).attr("src"), data));
+            }
+
             // columns: all elements of one media
-            Iterator<?> keys = copymap.keys();
-            while (keys.hasNext()) {
-                String key = (String) keys.next();
-                int index = copymap.getInt(key);
-                if (index >= 0) {
-                    String value = tr.child(index).text().trim();
+            for (Map.Entry<String, Integer> entry : copymap.entrySet()) {
+                String key = entry.getKey();
+                int index = entry.getValue();
+                String value = tr.child(index).text().trim();
 
-                    switch (key) {
-                        case "author":
-                            value = findTitleAndAuthor(value)[1];
-                            break;
-                        case "title":
-                            value = findTitleAndAuthor(value)[0];
-                            break;
-                        case "availability":
-                            try {
-                                value = fmt.parseLocalDate(value).toString();
-                            } catch (IllegalArgumentException e1) {
-                                key = "status";
-                            }
-                            break;
-                        case "expirationdate":
-                            try {
-                                value = fmt.parseLocalDate(value).toString();
-                            } catch (IllegalArgumentException e1) {
-                                key = "status";
-                            }
-                            break;
-                    }
+                switch (key) {
+                    case "author+title":
+                        item.setTitle(findTitleAndAuthor(value)[0]);
+                        item.setAuthor(findTitleAndAuthor(value)[1]);
+                        continue;
+                    case "availability":
+                        try {
+                            value = fmt.parseLocalDate(value).toString();
+                        } catch (IllegalArgumentException e1) {
+                            key = "status";
+                        }
+                        break;
+                    case "expirationdate":
+                        try {
+                            value = fmt.parseLocalDate(value).toString();
+                        } catch (IllegalArgumentException e1) {
+                            key = "status";
+                        }
+                        break;
+                }
 
-                    if (value != null && value.length() != 0) {
-                        item.set(key, value);
-                    }
-
+                if (value != null && value.length() != 0) {
+                    item.set(key, value);
                 }
             }
             reservations.add(item);
@@ -1181,17 +1301,20 @@ public class BiBer1992 extends BaseApi {
 
     private Document accountHttpPost(Account account, String func)
             throws IOException, OpacErrorException {
-        // get media list via http POST
-        List<NameValuePair> nameValuePairs = new ArrayList<>(2);
-        nameValuePairs.add(new BasicNameValuePair("FUNC", func));
-        nameValuePairs.add(new BasicNameValuePair("LANG", "de"));
-        nameValuePairs
-                .add(new BasicNameValuePair("BENUTZER", account.getName()));
-        nameValuePairs.add(new BasicNameValuePair("PASSWORD", account
-                .getPassword()));
+        return accountHttpPost(account, func, "user.C");
+    }
 
-        String html = httpPost(opacUrl + "/" + opacDir + "/user.C",
-                new UrlEncodedFormEntity(nameValuePairs), getDefaultEncoding());
+    private Document accountHttpPost(Account account, String func, String page)
+            throws IOException, OpacErrorException {
+        // get media list via http POST
+        FormBody.Builder formData = new FormBody.Builder(Charset.forName(getDefaultEncoding()));
+        formData.add("FUNC", func);
+        formData.add("LANG", "de");
+        formData.add("BENUTZER", account.getName());
+        formData.add("PASSWORD", account.getPassword());
+
+        String html = httpPost(opacUrl + "/" + opacDir + "/" + page,
+                formData.build(), getDefaultEncoding());
 
         Document doc = Jsoup.parse(html);
 
@@ -1207,12 +1330,20 @@ public class BiBer1992 extends BaseApi {
             }
             throw new OpacErrorException(errText);
         }
-        if (doc.select("tr td font[color=red]").size() == 1) {
-            throw new OpacErrorException(doc.select("font[color=red]").text());
+        if (doc.title().contains("Server error") || doc.title().contains("opax/titel!")) {
+            // seen in Minden & Bochum, real error message is only shown on login
+            accountHttpPost(account, "login", "login.C");
+        }
+        if (doc.select("tr td font[color=red], tr:eq(1) td:eq(0) .p02b").size() == 1) {
+            // Jena: Onleihe advertisement recognized as error message
+            String text = doc.select("tr td font[color=red], tr:eq(1) td:eq(0) .p02b").text();
+            if (!text.contains("Ausleihe per Download rund um die Uhr")) {
+                throw new OpacErrorException(text);
+            }
         }
         if (doc.text().contains("No html file set")
-                || doc.text().contains(
-                "Der BIBDIA Server konnte den Auftrag nicht")) {
+                || doc.text().contains("Der BIBDIA Server konnte den Auftrag nicht")
+                || doc.text().contains("Fehler in der Ausf")) {
             throw new OpacErrorException(
                     stringProvider.getString(StringProvider.WRONG_LOGIN_DATA));
         }
@@ -1240,6 +1371,12 @@ public class BiBer1992 extends BaseApi {
     @Override
     public ProlongAllResult prolongAll(Account account, int useraction,
             String selection) throws IOException {
+        return null;
+    }
+
+    @Override
+    public ProlongAllResult prolongMultiple(List<String> media,
+            Account account, int useraction, String selection) throws IOException {
         return null;
     }
 

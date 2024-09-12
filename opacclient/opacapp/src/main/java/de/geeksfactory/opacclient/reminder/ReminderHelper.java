@@ -7,7 +7,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Build;
-import android.preference.PreferenceManager;
+import androidx.preference.PreferenceManager;
 import android.util.Log;
 
 import org.joda.time.LocalDate;
@@ -27,10 +27,21 @@ import de.geeksfactory.opacclient.storage.AccountDataSource;
 public class ReminderHelper {
     private OpacClient app;
     private SharedPreferences sp;
+    private AccountDataSource data;
+    private boolean log;
 
     public ReminderHelper(OpacClient app) {
         this.app = app;
         sp = PreferenceManager.getDefaultSharedPreferences(app);
+        data = new AccountDataSource(app);
+        log = BuildConfig.DEBUG;
+    }
+
+    ReminderHelper(OpacClient app, SharedPreferences sp, AccountDataSource data) {
+        this.app = app;
+        this.sp = sp;
+        this.data = data;
+        log = false;
     }
 
     /**
@@ -42,7 +53,9 @@ public class ReminderHelper {
     }
 
     private void generateAlarms(int warning, Boolean enabled) {
-        resetNotified();
+        // resets the notified field to false for all alarms with finished == false this will re-show
+        // notifications that were not dismissed yet (for example after reboot)
+        data.resetNotifiedOnAllAlarams();
 
         if (warning == -1) warning = Integer.parseInt(sp.getString("notification_warning", "3"));
         if (warning > 10) {
@@ -53,21 +66,28 @@ public class ReminderHelper {
 
         if (enabled == null) enabled = sp.getBoolean("notification_service", false);
         if (!enabled) {
-            if (BuildConfig.DEBUG) {
+            if (log) {
                 Log.d("OpacClient",
                         "scheduling no alarms because notifications are disabled");
             }
             return;
         }
 
-        AccountDataSource data = new AccountDataSource(app);
-        data.open();
         List<LentItem> items = data.getAllLentItems();
 
         // Sort lent items by deadline
         Map<LocalDate, List<Long>> arrangedIds = new HashMap<>();
         for (LentItem item : items) {
             LocalDate deadline = item.getDeadline();
+            if (deadline == null) {
+                // Fail silently to not annoy users. We display a warning in account view in
+                // this case.
+                continue;
+            }
+            if (item.getDownloadData() != null && item.getDownloadData().contains(":")) {
+                // Don't remind people of bringing back ebooks, because ... uhm...
+                continue;
+            }
             if (!arrangedIds.containsKey(deadline)) {
                 arrangedIds.put(deadline, new ArrayList<Long>());
             }
@@ -77,9 +97,9 @@ public class ReminderHelper {
         for (Alarm alarm : data.getAllAlarms()) {
             // Remove alarms with no corresponding media
             if (!arrangedIds.containsKey(alarm.deadline)) {
+                cancelNotification(alarm);
                 data.removeAlarm(alarm);
             }
-
         }
 
         // Find and add/update corresponding alarms for current lent media
@@ -93,7 +113,7 @@ public class ReminderHelper {
                     data.updateAlarm(alarm);
                 }
             } else {
-                if (BuildConfig.DEBUG) {
+                if (log) {
                     Log.i("OpacClient",
                             "scheduling alarm for " + media.length + " items with deadline on " +
                                     DateTimeFormat.shortDate().print(deadline) + " on " +
@@ -103,9 +123,6 @@ public class ReminderHelper {
                         deadline.minusDays(warning).toDateTimeAtStartOfDay());
             }
         }
-
-        data.close();
-
         scheduleAlarms(true);
     }
 
@@ -132,10 +149,13 @@ public class ReminderHelper {
     }
 
     private void clearAlarms() {
-        AccountDataSource data = new AccountDataSource(app);
-        data.open();
         data.clearAlarms();
-        data.close();
+    }
+
+    private void cancelNotification(Alarm alarm) {
+        NotificationManager notificationManager = (NotificationManager) app
+                .getSystemService(Context.NOTIFICATION_SERVICE);
+        notificationManager.cancel((int) alarm.id);
     }
 
     private void cancelAllNotifications() {
@@ -154,24 +174,29 @@ public class ReminderHelper {
     private void scheduleAlarms(boolean enabled) {
         if (!sp.getBoolean("notification_service", false) && !enabled) return;
 
-        AccountDataSource data = new AccountDataSource(app);
         AlarmManager alarmManager = (AlarmManager) app.getSystemService(Context.ALARM_SERVICE);
 
-        data.open();
         List<Alarm> alarms = data.getAllAlarms();
-        data.close();
 
         for (Alarm alarm : alarms) {
             if (!alarm.notified) {
                 Intent i = new Intent(app, ReminderBroadcastReceiver.class);
                 i.setAction(ReminderBroadcastReceiver.ACTION_SHOW_NOTIFICATION);
                 i.putExtra(ReminderBroadcastReceiver.EXTRA_ALARM_ID, alarm.id);
-                PendingIntent pi = PendingIntent
-                        .getBroadcast(app, (int) alarm.id, i, PendingIntent.FLAG_UPDATE_CURRENT);
+                PendingIntent pi = null;
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                    pi = PendingIntent
+                            .getBroadcast(app, (int) alarm.id, i, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
+                } else {
+                    pi = PendingIntent
+                            .getBroadcast(app, (int) alarm.id, i, PendingIntent.FLAG_UPDATE_CURRENT);
+                }
                 // If the alarm's timestamp is in the past, AlarmManager will trigger it
                 // immediately.
-                setExact(alarmManager, AlarmManager.RTC_WAKEUP, alarm.notificationTime.getMillis(),
-                        pi);
+                setAlmostExact(alarmManager, AlarmManager.RTC_WAKEUP, alarm.notificationTime.getMillis(), pi);
+                Log.i("OpacClient",
+                        "scheduling setAlmostExact for " +
+                                DateTimeFormat.shortDateTime().print(alarm.notificationTime));
             }
         }
     }
@@ -183,31 +208,19 @@ public class ReminderHelper {
     }
 
     @SuppressWarnings("SameParameterValue")
-    private void setExact(AlarmManager am, int type, long triggerAtMillis,
+    private void setAlmostExact(AlarmManager am, int type, long triggerAtMillis,
             PendingIntent operation) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+        triggerAtMillis = Math.max(System.currentTimeMillis(), triggerAtMillis);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            am.setWindow(type, triggerAtMillis, 15 * 60 * 1000, operation);
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             am.setExact(type, triggerAtMillis, operation);
         } else {
             am.set(type, triggerAtMillis, operation);
         }
     }
 
-    /**
-     * resets the notified field to false for all alarms with finished == false this will re-show
-     * notifications that were not dismissed yet (for example after reboot)
-     */
     public void resetNotified() {
-        AccountDataSource data = new AccountDataSource(app);
-        data.open();
-        List<Alarm> alarms = data.getAllAlarms();
-
-        for (Alarm alarm : alarms) {
-            if (alarm.notified && !alarm.finished) {
-                alarm.notified = false;
-                data.updateAlarm(alarm);
-            }
-        }
-
-        data.close();
+        data.resetNotifiedOnAllAlarams();
     }
 }

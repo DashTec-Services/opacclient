@@ -18,14 +18,13 @@
  */
 package de.geeksfactory.opacclient.storage;
 
-import org.joda.time.DateTime;
-import org.joda.time.LocalDate;
-
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
-import android.database.SQLException;
 import android.database.sqlite.SQLiteDatabase;
+
+import org.joda.time.DateTime;
+import org.joda.time.LocalDate;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -35,24 +34,20 @@ import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.AccountItem;
 import de.geeksfactory.opacclient.objects.LentItem;
 import de.geeksfactory.opacclient.objects.ReservedItem;
+import de.geeksfactory.opacclient.objects.SearchResult;
 import de.geeksfactory.opacclient.reminder.Alarm;
 
 public class AccountDataSource {
     // Database fields
     private SQLiteDatabase database;
-    private AccountDatabase dbHelper;
     private String[] allColumns = AccountDatabase.COLUMNS;
 
     public AccountDataSource(Context context) {
-        dbHelper = new AccountDatabase(context);
-    }
-
-    public void open() throws SQLException {
+        AccountDatabase dbHelper = AccountDatabase.getInstance(context);
         database = dbHelper.getWritableDatabase();
-    }
-
-    public void close() {
-        dbHelper.close();
+        // we do not need to close the database, as only one instance is created
+        // see e.g. http://stackoverflow
+        // .com/questions/4547461/closing-the-database-in-a-contentprovider/12715032#12715032
     }
 
     public long addAccount(Account acc) {
@@ -71,6 +66,7 @@ public class AccountDataSource {
         values.put("name", acc.getName());
         values.put("password", acc.getPassword());
         values.put("passwordValid", acc.isPasswordKnownValid() ? 1 : 0);
+        values.put("supportPolicyHintSeen", acc.isSupportPolicyHintSeen() ? 1 : 0);
         database.update("accounts", values, "id = ?", new String[]{acc.getId() + ""});
     }
 
@@ -155,10 +151,12 @@ public class AccountDataSource {
         acc.setPassword(cursor.getString(4));
         acc.setCached(cursor.getLong(5));
         acc.setPasswordKnownValid(cursor.getLong(9) > 0);
+        acc.setSupportPolicyHintSeen(cursor.getLong(10) > 0);
         return acc;
     }
 
     public void remove(Account acc) {
+        deleteAccountData(acc);
         String[] selA = {"" + acc.getId()};
         database.delete("accounts", "id=?", selA);
     }
@@ -180,7 +178,7 @@ public class AccountDataSource {
         List<LentItem> lent = new ArrayList<>();
         String[] selectionArgs = {"" + account.getId()};
         Cursor cursor = database.query(AccountDatabase.TABLENAME_LENT, AccountDatabase.COLUMNS_LENT,
-                "account = ?", selectionArgs, null, null, null);
+                "account = ?", selectionArgs, null, null, "ebook ASC, deadline ASC");
         cursor.moveToFirst();
         while (!cursor.isAfterLast()) {
             LentItem entry = cursorToLentItem(cursor);
@@ -254,6 +252,10 @@ public class AccountDataSource {
         item.setFormat(cursor.getString(4));
         item.setId(cursor.getString(5));
         item.setStatus(cursor.getString(6));
+        String mediatype = cursor.getString(cursor.getColumnIndexOrThrow("mediatype"));
+        item.setMediaType(mediatype != null ? SearchResult.MediaType.valueOf(mediatype) : null);
+        item.setCover(cursor.getString(cursor.getColumnIndexOrThrow("cover")));
+        item.setCoverBitmap(cursor.getBlob(cursor.getColumnIndexOrThrow("coverBitmap")));
     }
 
     private ContentValues lentItemToContentValues(LentItem item, long accountId) {
@@ -289,6 +291,10 @@ public class AccountDataSource {
         putOrNull(cv, "format", item.getFormat());
         putOrNull(cv, "itemid", item.getId());
         putOrNull(cv, "status", item.getStatus());
+        putOrNull(cv, "cover", item.getCover());
+        putOrNull(cv, "coverBitmap", item.getCoverBitmap());
+        putOrNull(cv, "mediatype",
+                item.getMediaType() != null ? item.getMediaType().toString() : null);
     }
 
     private void putOrNull(ContentValues cv, String key, LocalDate value) {
@@ -300,6 +306,14 @@ public class AccountDataSource {
     }
 
     private void putOrNull(ContentValues cv, String key, String value) {
+        if (value != null) {
+            cv.put(key, value);
+        } else {
+            cv.putNull(key);
+        }
+    }
+
+    private void putOrNull(ContentValues cv, String key, byte[] value) {
         if (value != null) {
             cv.put(key, value);
         } else {
@@ -319,16 +333,17 @@ public class AccountDataSource {
         database.update(AccountDatabase.TABLENAME_ACCOUNTS, update, null, null);
     }
 
-    public void invalidateCachedAccountData(Account account) {
+    public void deleteAccountData(Account account) {
         database.delete(AccountDatabase.TABLENAME_LENT, "account = ?",
                 new String[]{"" + account.getId()});
         database.delete(AccountDatabase.TABLENAME_RESERVATION, "account = ?",
                 new String[]{"" + account.getId()});
+
+    }
+
+    public void invalidateCachedAccountData(Account account) {
         ContentValues update = new ContentValues();
         update.put("cached", 0);
-        update.put("pendingFees", (String) null);
-        update.put("validUntil", (String) null);
-        update.put("warning", (String) null);
         database.update(AccountDatabase.TABLENAME_ACCOUNTS, update, "id = ?",
                 new String[]{"" + account.getId()});
     }
@@ -370,7 +385,7 @@ public class AccountDataSource {
         List<LentItem> items = new ArrayList<>();
         Cursor cursor = database
                 .query(AccountDatabase.TABLENAME_LENT, AccountDatabase.COLUMNS_LENT, null, null,
-                        null, null, null);
+                        null, null, "ebook ASC, deadline ASC");
         cursor.moveToFirst();
         while (!cursor.isAfterLast()) {
             LentItem item = cursorToLentItem(cursor);
@@ -430,6 +445,14 @@ public class AccountDataSource {
     }
 
     public long addAlarm(LocalDate deadline, long[] media, DateTime alarmTime) {
+        for (long mid : media) {
+            if (getLentItem(mid) == null) {
+                throw new DataIntegrityException(
+                        "Cannot add alarm with deadline " + deadline.toString() +
+                                " that has dependency on the non-existing media item " + mid);
+            }
+        }
+
         ContentValues values = new ContentValues();
         values.put("deadline", deadline.toString());
         values.put("media", joinLongs(media, ","));
@@ -440,6 +463,14 @@ public class AccountDataSource {
     }
 
     public void updateAlarm(Alarm alarm) {
+        for (long mid : alarm.media) {
+            if (getLentItem(mid) == null) {
+                throw new DataIntegrityException(
+                        "Cannot update alarm with deadline " + alarm.deadline.toString() +
+                                " that has dependency on the non-existing media item " + mid);
+            }
+        }
+
         ContentValues values = new ContentValues();
         values.put("deadline", alarm.deadline.toString());
         values.put("media", joinLongs(alarm.media, ","));
@@ -448,6 +479,12 @@ public class AccountDataSource {
         values.put("finished", alarm.finished ? 1 : 0);
         database.update(AccountDatabase.TABLENAME_ALARMS, values, "id = ?",
                 new String[]{alarm.id + ""});
+    }
+
+    public void resetNotifiedOnAllAlarams() {
+        ContentValues values = new ContentValues();
+        values.put("notified", 0);
+        database.update(AccountDatabase.TABLENAME_ALARMS, values, "finished = 0 AND notified = 1", null);
     }
 
     public Alarm getAlarmByDeadline(LocalDate deadline) {

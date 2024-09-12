@@ -1,15 +1,10 @@
 package de.geeksfactory.opacclient.frontend;
 
 import android.app.Activity;
-import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
-import android.support.v7.app.AppCompatDialog;
-import android.support.v7.preference.Preference;
-import android.support.v7.preference.PreferenceFragmentCompat;
 import android.text.Html;
-import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
@@ -19,6 +14,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 
+import androidx.appcompat.app.AppCompatDialog;
+import androidx.preference.Preference;
+import androidx.preference.PreferenceFragmentCompat;
 import de.geeksfactory.opacclient.OpacClient;
 import de.geeksfactory.opacclient.R;
 
@@ -44,54 +42,22 @@ public class AboutFragment extends PreferenceFragmentCompat {
                     public boolean onPreferenceClick(Preference preference) {
                         Intent i = new Intent(Intent.ACTION_VIEW);
                         if (getString(R.string.website_url).contains("de")) {
-                            i.setData(Uri.parse("http://de.opacapp.net"));
+                            i.setData(Uri.parse("http://opac.app/de/"));
                         } else {
-                            i.setData(Uri.parse("http://en.opacapp.net"));
+                            i.setData(Uri.parse("http://opac.app/en/"));
                         }
                         startActivity(i);
                         return false;
                     }
                 });
 
-        findPreference("developer").setOnPreferenceClickListener(
+        findPreference("support").setOnPreferenceClickListener(
                 new Preference.OnPreferenceClickListener() {
                     @Override
                     public boolean onPreferenceClick(Preference preference) {
                         Intent i = new Intent(Intent.ACTION_VIEW);
-                        i.setData(Uri.parse("http://www.raphaelmichel.de"));
+                        i.setData(Uri.parse(getString(R.string.support_url)));
                         startActivity(i);
-                        return false;
-                    }
-                });
-
-        findPreference("feedback").setOnPreferenceClickListener(
-                new Preference.OnPreferenceClickListener() {
-                    @Override
-                    public boolean onPreferenceClick(Preference preference) {
-                        Intent emailIntent = new Intent(
-                                android.content.Intent.ACTION_SEND);
-                        emailIntent.putExtra(
-                                android.content.Intent.EXTRA_EMAIL,
-                                new String[]{"info@opacapp.de"});
-                        emailIntent.setType("text/plain");
-                        startActivity(Intent.createChooser(emailIntent,
-                                getString(R.string.write_mail)));
-                        return false;
-                    }
-                });
-
-        findPreference("rate_play").setOnPreferenceClickListener(
-                new Preference.OnPreferenceClickListener() {
-                    @Override
-                    public boolean onPreferenceClick(Preference preference) {
-                        try {
-                            Intent i = new Intent(
-                                    Intent.ACTION_VIEW,
-                                    Uri.parse("market://details?id=de.geeksfactory.opacclient"));
-                            startActivity(i);
-                        } catch (ActivityNotFoundException e) {
-                            Log.i("rate_play", "no market installed");
-                        }
                         return false;
                     }
                 });

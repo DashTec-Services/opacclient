@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<android.support.v7.widget.CardView
+<androidx.cardview.widget.CardView
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -17,6 +17,20 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:padding="8dp">
+
+        <de.geeksfactory.opacclient.ui.vectordrawable.VectorDrawableTextView
+            android:id="@+id/tvIssue"
+            android:layout_width="fill_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textIsSelectable="true"
+            app:drawableLeftCompat="@drawable/ic_date_range_24dp"
+            tools:drawableLeft="@drawable/ic_date_range_24dp"
+            android:drawablePadding="8dp"
+            android:gravity="center_vertical"
+            android:contentDescription="@string/issue"/>
 
         <de.geeksfactory.opacclient.ui.vectordrawable.VectorDrawableTextView
             android:id="@+id/tvBranch"
@@ -138,4 +152,4 @@
                 android:contentDescription="@string/reservations"/>
         </LinearLayout>
     </LinearLayout>
-</android.support.v7.widget.CardView>
+</androidx.cardview.widget.CardView>

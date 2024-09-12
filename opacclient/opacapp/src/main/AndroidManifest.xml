@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          xmlns:tools="http://schemas.android.com/tools"
-          package="de.geeksfactory.opacclient">
+    xmlns:tools="http://schemas.android.com/tools"
+    package="de.geeksfactory.opacclient">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -9,6 +9,26 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <queries>
+        <package android:name="de.etecture.ekz.onleihe" />
+        <package android:name="com.google.zxing.client.android" />
+        <package android:name="com.srowen.bs.android" />
+        <package android:name="com.srowen.bs.android.simple" />
+        <package android:name="de.t_dankworth.secscanqr" />
+        <package android:name="la.droid.qr" />
+        <package android:name="la.droid.qr.priva" />
+        <package android:name="com.android.aldiko" />
+        <package android:name="com.aldiko.android" />
+        <package android:name="com.bluefirereader" />
+        <package android:name="com.mantano.reader.android.lite" />
+        <package android:name="com.overdrive.mobile.android.mediaconsole" />
+        <package android:name="com.datalogics.dlreader" />
+        <package android:name="com.mantano.reader.android.normal" />
+        <package android:name="com.mantano.reader.android" />
+        <package android:name="com.neosoar" />
+    </queries>
 
     <uses-feature
         android:name="android.hardware.nfc"
@@ -20,16 +40,24 @@
         android:name="android.hardware.location.network"
         android:required="false" />
 
+    <uses-sdk tools:overrideLibrary="com.android.ndk.thirdparty.openssl" />
+
     <application
-        tools:replace="android:supportsRtl, android:allowBackup"
         android:name="de.geeksfactory.opacclient.OpacClient"
         android:allowBackup="false"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="false"
-        android:theme="@style/Theme.Opacapp.NoActionBar">
-    <activity
+        android:theme="@style/Theme.Opacapp.NoActionBar"
+        android:usesCleartextTraffic="true"
+        tools:replace="android:supportsRtl, android:allowBackup">
+        <uses-library
+            android:name="org.apache.http.legacy"
+            android:required="false" />
+
+        <activity
             android:name="de.geeksfactory.opacclient.frontend.MainActivity"
+            android:exported="true"
             android:label="@string/launcher_name"
             android:theme="@style/Theme.Opacapp.NoActionBar.WithDrawer">
             <intent-filter>
@@ -48,11 +76,17 @@
                     android:pathPrefix="/:"
                     android:scheme="http" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="de.geeksfactory.opacclient.SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="de.geeksfactory.opacclient.ACCOUNT" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
         <activity
-            android:name="de.geeksfactory.opacclient.frontend.WelcomeActivity"
-            android:label="@string/app_name" >
-        </activity>
+            android:name="de.geeksfactory.opacclient.frontend.WelcomeActivity" />
         <activity
             android:name="de.geeksfactory.opacclient.frontend.AccountEditActivity"
             android:label="@string/accounts_edit"
@@ -63,14 +97,14 @@
         </activity>
         <activity
             android:name="de.geeksfactory.opacclient.frontend.MainPreferenceActivity"
-            android:label="@string/prefs" >
+            android:label="@string/prefs">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value="de.geeksfactory.opacclient.frontend.MainActivity" />
         </activity>
         <activity
             android:name="de.geeksfactory.opacclient.frontend.AboutActivity"
-            android:label="@string/about" >
+            android:label="@string/about">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value="de.geeksfactory.opacclient.frontend.MainActivity" />
@@ -78,7 +112,7 @@
         <activity
             android:name="de.geeksfactory.opacclient.frontend.AccountListActivity"
             android:label="@string/title_activity_account_list"
-            android:uiOptions="splitActionBarWhenNarrow" >
+            android:uiOptions="splitActionBarWhenNarrow">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value="de.geeksfactory.opacclient.frontend.MainPreferenceActivity" />
@@ -89,22 +123,24 @@
         <activity
             android:name="de.geeksfactory.opacclient.frontend.SearchResultListActivity"
             android:label="@string/title_searchresult_list"
-            android:parentActivityName="de.geeksfactory.opacclient.frontend.MainActivity" >
+            android:exported="false"
+            android:parentActivityName="de.geeksfactory.opacclient.frontend.MainActivity">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value="de.geeksfactory.opacclient.frontend.MainActivity" />
             <meta-data
                 android:name="android.support.UI_OPTIONS"
                 android:value="splitActionBarWhenNarrow" />
+
             <intent-filter>
-		        <action android:name="com.google.android.gms.actions.SEARCH_ACTION"/>
-		        <category android:name="android.intent.category.DEFAULT"/>
-		    </intent-filter>
+                <action android:name="com.google.android.gms.actions.SEARCH_ACTION" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
         <activity
             android:name="de.geeksfactory.opacclient.frontend.SearchResultDetailActivity"
             android:parentActivityName="de.geeksfactory.opacclient.frontend.SearchResultListActivity"
-            android:uiOptions="splitActionBarWhenNarrow" >
+            android:uiOptions="splitActionBarWhenNarrow">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value="de.geeksfactory.opacclient.frontend.SearchResultListActivity" />
@@ -114,54 +150,40 @@
         </activity>
         <activity
             android:name="de.geeksfactory.opacclient.frontend.LibraryListActivity"
+            android:exported="false"
             android:label="@string/title_activity_library_list"
-            android:launchMode="singleTop" >
+            android:launchMode="singleTop">
             <intent-filter>
-            	<action android:name="android.intent.action.SEARCH" />
-        	</intent-filter>
-        	<meta-data android:name="android.app.searchable"
-                   android:resource="@xml/searchable_libraries"/>
-        	<meta-data
+                <action android:name="android.intent.action.SEARCH" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.app.searchable"
+                android:resource="@xml/searchable_libraries" />
+            <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value="de.geeksfactory.opacclient.frontend.AccountListActivity" />
         </activity>
         <activity
-            android:name="de.geeksfactory.opacclient.frontend.SuggestLibraryActivity"
-            android:label="@string/title_activity_suggest_library"
-            android:theme="@style/Theme.Opacapp.Floating">
-        	<meta-data
-                android:name="android.support.PARENT_ACTIVITY"
-                android:value="de.geeksfactory.opacclient.frontend.LibraryListActivity" />
-        </activity>
-        <activity
-            android:name="org.acra.CrashReportDialog"
-            android:excludeFromRecents="true"
-            android:finishOnTaskLaunch="true"
-            android:launchMode="singleInstance"
-            android:theme="@style/Theme.AppCompat.Light.Dialog" />
-        <activity
             android:name="de.geeksfactory.opacclient.frontend.SnoozeDatePickerActivity"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
             android:theme="@style/Theme.Opacapp.Transparent" />
+        <activity
+            android:name="de.geeksfactory.opacclient.frontend.AccountItemDetailActivity"
+            android:theme="@style/Theme.Opacapp.Base.AccountDetail" />
 
-        <service android:name="de.geeksfactory.opacclient.reminder.SyncAccountService">
-        </service>
+        <service
+            android:name="de.geeksfactory.opacclient.webservice.LibraryConfigUpdateService"
+            android:exported="false" />
 
-        <receiver
-            android:name="de.geeksfactory.opacclient.reminder.ReminderBootBroadcastReceiver">
+        <receiver android:name="de.geeksfactory.opacclient.reminder.ReminderBootBroadcastReceiver"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
-        </receiver>
-
-        <receiver android:name="com.commonsware.cwac.wakeful.AlarmReceiver">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-
-            <meta-data
-                android:name="com.commonsware.cwac.wakeful"
-                android:resource="@xml/wakefulintentservice" />
         </receiver>
 
         <receiver android:name="de.geeksfactory.opacclient.reminder.ReminderBroadcastReceiver" />
@@ -170,6 +192,14 @@
             android:name="de.geeksfactory.opacclient.storage.StarContentProvider"
             android:authorities="${applicationId}.starprovider"
             android:exported="false" />
+
+        <meta-data
+            android:name="de.geeksfactory.opacclient.networking.CustomSSLGlideModule"
+            android:value="GlideModule" />
+
+        <meta-data
+            android:name="io.sentry.auto-init"
+            android:value="false" />
     </application>
 
 </manifest>

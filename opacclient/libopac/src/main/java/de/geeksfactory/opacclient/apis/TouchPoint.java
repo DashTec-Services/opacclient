@@ -2,27 +2,26 @@
  * Copyright (C) 2014 by Johan von Forstner under the MIT license:
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), 
- * to deal in the Software without restriction, including without limitation 
- * the rights to use, copy, modify, merge, publish, distribute, sublicense, 
- * and/or sell copies of the Software, and to permit persons to whom the Software 
+ * of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the Software
  * is furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in 
+ * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
- * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, 
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+ * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
 package de.geeksfactory.opacclient.apis;
 
 import org.apache.http.NameValuePair;
-import org.apache.http.client.entity.UrlEncodedFormEntity;
 import org.apache.http.client.utils.URLEncodedUtils;
 import org.apache.http.message.BasicNameValuePair;
 import org.joda.time.format.DateTimeFormat;
@@ -34,11 +33,13 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.nodes.Node;
 import org.jsoup.nodes.TextNode;
+import org.jsoup.parser.Parser;
 import org.jsoup.select.Elements;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.util.ArrayList;
@@ -52,11 +53,12 @@ import java.util.regex.Pattern;
 
 import de.geeksfactory.opacclient.i18n.StringProvider;
 import de.geeksfactory.opacclient.networking.HttpClientFactory;
+import de.geeksfactory.opacclient.networking.NotReachableException;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Filter.Option;
 import de.geeksfactory.opacclient.objects.LentItem;
@@ -69,11 +71,13 @@ import de.geeksfactory.opacclient.searchfields.DropdownSearchField;
 import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 import de.geeksfactory.opacclient.searchfields.TextSearchField;
+import okhttp3.FormBody;
+import okhttp3.HttpUrl;
 
 /**
  * OpacApi implementation for Web Opacs of the TouchPoint product, developed by OCLC.
  */
-public class TouchPoint extends BaseApi implements OpacApi {
+public class TouchPoint extends OkHttpBaseApi implements OpacApi {
     protected static HashMap<String, MediaType> defaulttypes = new HashMap<>();
 
     static {
@@ -155,14 +159,13 @@ public class TouchPoint extends BaseApi implements OpacApi {
     protected JSONObject data;
     protected String CSId;
     protected String identifier;
-    protected String reusehtml;
     protected String reusehtml_reservation;
     protected int resultcount = 10;
     protected long logged_in;
     protected Account logged_in_as;
     protected String ENCODING = "UTF-8";
 
-    public List<SearchField> getSearchFields() throws IOException,
+    public List<SearchField> parseSearchFields() throws IOException,
             JSONException {
         if (!initialised) {
             start();
@@ -186,6 +189,23 @@ public class TouchPoint extends BaseApi implements OpacApi {
 
         for (Element dropdown : doc.select(".accordion-body select")) {
             parseDropdown(dropdown, fields);
+        }
+
+        if (doc.select(".selectDatabase").size() > 0) {
+            DropdownSearchField dropdown = new DropdownSearchField();
+            dropdown.setId("_database");
+            for (Element option : doc.select(".selectDatabase")) {
+                String label = option.parent().ownText().trim();
+                if (label.equals("")) {
+                    for (Element a : option.siblingElements()) {
+                        label += a.ownText().trim();
+                    }
+                }
+                dropdown.addDropdownValue(option.attr("name") + "=" + option.attr("value"),
+                        label.trim());
+            }
+            dropdown.setDisplayName(doc.select(".dbselection h3").first().text().trim());
+            fields.add(dropdown);
         }
 
         return fields;
@@ -234,8 +254,8 @@ public class TouchPoint extends BaseApi implements OpacApi {
     }
 
     @Override
-    public void init(Library lib, HttpClientFactory httpClientFactory) {
-        super.init(lib, httpClientFactory);
+    public void init(Library lib, HttpClientFactory httpClientFactory, boolean debug) {
+        super.init(lib, httpClientFactory, debug);
         this.data = lib.getData();
 
         try {
@@ -251,22 +271,27 @@ public class TouchPoint extends BaseApi implements OpacApi {
             JSONException {
         List<NameValuePair> params = new ArrayList<>();
 
+        boolean selectDatabase = false;
         int index = 0;
         start();
 
         params.add(new BasicNameValuePair("methodToCall", "submitButtonCall"));
         params.add(new BasicNameValuePair("CSId", CSId));
-        params.add(new BasicNameValuePair("methodToCallParameter",
-                "submitSearch"));
         params.add(new BasicNameValuePair("refine", "false"));
+        params.add(new BasicNameValuePair("numberOfHits", "10"));
 
         for (SearchQuery entry : query) {
             if (entry.getValue().equals("")) {
                 continue;
             }
             if (entry.getSearchField() instanceof DropdownSearchField) {
-                params.add(new BasicNameValuePair(entry.getKey(), entry
-                        .getValue()));
+                if (entry.getKey().equals("_database")) {
+                    String[] parts = entry.getValue().split("=", 2);
+                    params.add(new BasicNameValuePair(parts[0], parts[1]));
+                    selectDatabase = true;
+                } else {
+                    params.add(new BasicNameValuePair(entry.getKey(), entry.getValue()));
+                }
             } else {
                 if (index != 0) {
                     params.add(new BasicNameValuePair("combinationOperator["
@@ -289,14 +314,21 @@ public class TouchPoint extends BaseApi implements OpacApi {
                     StringProvider.LIMITED_NUM_OF_CRITERIA, 4, 4));
         }
 
-        params.add(new BasicNameValuePair("submitButtonCall_submitSearch",
-                "Suchen"));
-        params.add(new BasicNameValuePair("numberOfHits", "10"));
+        if (selectDatabase) {
+            List<NameValuePair> selectParams = new ArrayList<>();
+            selectParams.addAll(params);
+            selectParams.add(new BasicNameValuePair("methodToCallParameter", "selectDatabase"));
+            httpGet(opac_url + "/search.do?" + URLEncodedUtils.format(selectParams, "UTF-8"),
+                    ENCODING);
+        }
+
+        params.add(new BasicNameValuePair("submitButtonCall_submitSearch", "Suchen"));
+        params.add(new BasicNameValuePair("methodToCallParameter", "submitSearch"));
 
         String html = httpGet(
                 opac_url + "/search.do?"
                         + URLEncodedUtils.format(params, "UTF-8"), ENCODING);
-        return parse_search(html, 1);
+        return parse_search_wrapped(html, 1);
     }
 
     public SearchRequestResult volumeSearch(Map<String, String> query)
@@ -310,7 +342,7 @@ public class TouchPoint extends BaseApi implements OpacApi {
         String html = httpGet(
                 opac_url + "/search.do?"
                         + URLEncodedUtils.format(params, "UTF-8"), ENCODING);
-        return parse_search(html, 1);
+        return parse_search_wrapped(html, 1);
     }
 
     @Override
@@ -323,11 +355,28 @@ public class TouchPoint extends BaseApi implements OpacApi {
         String html = httpGet(opac_url
                 + "/hitList.do?methodToCall=pos&identifier=" + identifier
                 + "&curPos=" + (((page - 1) * resultcount) + 1), ENCODING);
-        return parse_search(html, page);
+        return parse_search_wrapped(html, page);
+    }
+
+    public class SingleResultFound extends Exception {
+    }
+
+    protected SearchRequestResult parse_search_wrapped(String html, int page) throws IOException, OpacErrorException {
+        try {
+            return parse_search(html, page);
+        } catch (SingleResultFound e) {
+            html = httpGet(opac_url + "/hitList.do?methodToCall=backToCompleteList&identifier=" +
+                    identifier, ENCODING);
+            try {
+                return parse_search(html, page);
+            } catch (SingleResultFound e1) {
+                throw new NotReachableException();
+            }
+        }
     }
 
     protected SearchRequestResult parse_search(String html, int page)
-            throws OpacErrorException, IOException {
+            throws OpacErrorException, IOException, IOException, SingleResultFound {
         Document doc = Jsoup.parse(html);
 
         if (doc.select("#RefineHitListForm").size() > 0) {
@@ -348,16 +397,22 @@ public class TouchPoint extends BaseApi implements OpacApi {
 
         int results_total = -1;
 
-        String resultnumstr = doc.select(".box-header h2").first().text();
+        String resultnumstr = doc.select(".box-header h2, .box-header h1").first().text();
         if (resultnumstr.contains("(1/1)") || resultnumstr.contains(" 1/1")) {
-            reusehtml = html;
-            throw new OpacErrorException("is_a_redirect");
+            throw new SingleResultFound();
         } else if (resultnumstr.contains("(")) {
             results_total = Integer.parseInt(resultnumstr.replaceAll(
                     ".*\\(([0-9]+)\\).*", "$1"));
         } else if (resultnumstr.contains(": ")) {
             results_total = Integer.parseInt(resultnumstr.replaceAll(
                     ".*: ([0-9]+)$", "$1"));
+        } else if (resultnumstr.contains("Treffer")) {
+            try {
+                results_total = Integer.parseInt(resultnumstr.replaceAll(
+                        ".* ([0-9]+)$", "$1"));
+            } catch (NumberFormatException e) {
+                // pass
+            }
         }
 
         Elements table = doc.select("table.data > tbody > tr");
@@ -390,9 +445,9 @@ public class TouchPoint extends BaseApi implements OpacApi {
         for (int i = 0; i < table.size(); i++) {
             Element tr = table.get(i);
             SearchResult sr = new SearchResult();
-            if (tr.select(".icn, img[width=32]").size() > 0) {
-                String[] fparts = tr.select(".icn, img[width=32]").first()
-                                    .attr("src").split("/");
+            Element icon = tr.select(".icn, img[width=32], .icon img").first();
+            if (icon != null) {
+                String[] fparts = icon.attr("src").split("/");
                 String fname = fparts[fparts.length - 1];
                 String changedFname = fname.toLowerCase(Locale.GERMAN)
                                            .replace(".jpg", "").replace(".gif", "")
@@ -432,20 +487,7 @@ public class TouchPoint extends BaseApi implements OpacApi {
             // and loan status of the item
 
             // get cover
-            if (tr.select(".cover script").size() > 0) {
-                String js = tr.select(".cover script").first().html();
-                String isbn = matchJSVariable(js, "isbn");
-                String ajaxUrl = matchJSVariable(js, "ajaxUrl");
-                if (!"".equals(isbn) && !"".equals(ajaxUrl)) {
-                    String url = new URL(new URL(opac_url + "/"), ajaxUrl)
-                            .toString();
-                    String coverUrl = httpGet(url + "?isbn=" + isbn
-                            + "&size=small", ENCODING);
-                    if (!"".equals(coverUrl)) {
-                        sr.setCover(coverUrl.replace("\r\n", "").trim());
-                    }
-                }
-            }
+            sr.setCover(findCoverUrl(tr, true));
             // get loan status and media ID
             if (tr.select("div[id^=loanstatus] + script").size() > 0) {
                 String js = tr.select("div[id^=loanstatus] + script").first()
@@ -455,6 +497,7 @@ public class TouchPoint extends BaseApi implements OpacApi {
                         "hitlistPosition", "duplicateHitlistIdentifier",
                         "itemType", "titleStatus", "typeofHit", "context"};
                 String ajaxUrl = matchJSVariable(js, "ajaxUrl");
+                if (ajaxUrl == null) ajaxUrl = matchJSVariable(js, "currentUrl");
                 if (!"".equals(ajaxUrl)) {
                     JSONObject id = new JSONObject();
                     List<NameValuePair> map = new ArrayList<>();
@@ -480,8 +523,14 @@ public class TouchPoint extends BaseApi implements OpacApi {
                             url + "?" + URLEncodedUtils.format(map, "UTF-8"),
                             ENCODING).replace("\r\n", "").trim();
                     Document loanStatusDoc = Jsoup.parse(loanStatusHtml);
-                    String loanstatus = loanStatusDoc.text()
-                                                     .replace("\u00bb", "").trim();
+
+                    String loanstatus;
+                    if (loanStatusDoc.select("a").size() == 1) {
+                        loanstatus = loanStatusDoc.select("a").first().text();
+                    } else {
+                        loanstatus = loanStatusDoc.text();
+                    }
+                    loanstatus = loanstatus.replace("\u00bb", "").trim();
 
                     if ((loanstatus.startsWith("entliehen")
                             && loanstatus.contains("keine Vormerkung möglich") || loanstatus
@@ -502,6 +551,11 @@ public class TouchPoint extends BaseApi implements OpacApi {
                             || (loanstatus.contains("ausleihbar") && !loanstatus
                             .contains("nicht ausleihbar"))) {
                         sr.setStatus(SearchResult.Status.GREEN);
+                    } else if (loanstatus.equals("")) {
+                        // In special databases (like "Handschriften" in Winterthur) ID lookup is
+                        // not possible, which we try to detect this way. We therefore also cannot
+                        // use getResultById when accessing the results.
+                        sr.setId(null);
                     }
                     if (sr.getType() != null) {
                         if (sr.getType().equals(MediaType.EBOOK)
@@ -527,7 +581,7 @@ public class TouchPoint extends BaseApi implements OpacApi {
 
     private String matchJSVariable(String js, String varName) {
         Pattern patternVar = Pattern.compile("var \\s*" + varName
-                + "\\s*=\\s*\"([^\"]*)\"\\s*;");
+                + "\\s*=\\s*[\"']([^\"']*)[\"']\\s*;");
         Matcher matcher = patternVar.matcher(js);
         if (matcher.find()) {
             return matcher.group(1);
@@ -559,85 +613,78 @@ public class TouchPoint extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException {
-
-        if (id == null && reusehtml != null) {
-            DetailledItem r = parse_result(reusehtml);
-            reusehtml = null;
-            return r;
-        }
-        String html;
-        try {
-            JSONObject json = new JSONObject(id);
-            html = httpGet(
-                    opac_url
-                            + "/perma.do?q="
-                            + URLEncoder.encode("0=\"" + json.getString("id")
-                                    + "\" IN [" + json.getString("db") + "]",
-                            "UTF-8"), ENCODING);
-        } catch (JSONException e) {
-            // backwards compatibility
-            html = httpGet(
-                    opac_url
-                            + "/perma.do?q="
-                            + URLEncoder.encode("0=\"" + id + "\" IN [2]",
-                            "UTF-8"), ENCODING);
-        }
-
+        String html = httpGet(getUrlForId(id), ENCODING);
         return parse_result(html);
     }
 
-    @Override
-    public DetailledItem getResult(int nr) throws IOException {
-        if (reusehtml != null) {
-            return getResultById(null, null);
+    public String getUrlForId(String id) throws UnsupportedEncodingException {
+        try {
+            JSONObject json = new JSONObject(id);
+            if (json.has("url")) {
+                URI permaUrl = new URI(json.getString("url"));
+                URI baseUrl = new URI(opac_url);
+                URI newUrl = new URI(baseUrl.getScheme(), baseUrl.getUserInfo(), baseUrl.getHost(),
+                        baseUrl.getPort(), permaUrl.getPath(), permaUrl.getQuery(),
+                        permaUrl.getFragment());
+                return newUrl.toString();
+            } else {
+                String param =
+                        json.optString("field", "0") + "=\"" + json.getString("id") + "\" IN [" +
+                                json.getString("db") + "]";
+                return opac_url + "/perma.do?q=" + URLEncoder.encode(param, "UTF-8");
+            }
+        } catch (JSONException e) {
+            // backwards compatibility
+            return opac_url + "/perma.do?q=" +
+                    URLEncoder.encode("0=\"" + id + "\" IN [2]", "UTF-8");
+        } catch (URISyntaxException e) {
+            e.printStackTrace();
+            return null;
         }
+    }
+
+    @Override
+    public DetailedItem getResult(int nr) throws IOException {
         String html = httpGet(opac_url
                 + "/singleHit.do?methodToCall=showHit&curPos=" + nr
                 + "&identifier=" + identifier, ENCODING);
         return parse_result(html);
     }
 
-    protected DetailledItem parse_result(String html) throws IOException {
+    protected DetailedItem parse_result(String html) throws IOException {
         Document doc = Jsoup.parse(html);
         doc.setBaseUri(opac_url);
 
-        DetailledItem result = new DetailledItem();
+        DetailedItem result = new DetailedItem();
 
-        if (doc.select("#cover script").size() > 0) {
-            String js = doc.select("#cover script").first().html();
-            String isbn = matchJSVariable(js, "isbn");
-            String ajaxUrl = matchJSVariable(js, "ajaxUrl");
-            if (ajaxUrl == null) {
-                ajaxUrl = matchJSParameter(js, "url");
-            }
-            if (ajaxUrl != null && !"".equals(ajaxUrl)) {
-                if (!"".equals(isbn) && isbn != null) {
-                    String url = new URL(new URL(opac_url + "/"), ajaxUrl)
-                            .toString();
-                    String coverUrl = httpGet(url + "?isbn=" + isbn
-                            + "&size=medium", ENCODING);
-                    if (!"".equals(coverUrl)) {
-                        result.setCover(coverUrl.replace("\r\n", "").trim());
-                    }
-                } else {
-                    String url = new URL(new URL(opac_url + "/"), ajaxUrl)
-                            .toString();
-                    String coverJs = httpGet(url, ENCODING);
-                    result.setCover(matchHTMLAttr(coverJs, "src"));
-                }
+        result.setCover(findCoverUrl(doc, false));
+
+        if (doc.select("#permalink-link").size() > 0) {
+            String href = doc.select("#permalink-link").first().attr("href");
+            JSONObject id = new JSONObject();
+            try {
+                id.put("url", href);
+                result.setId(id.toString());
+            } catch (JSONException e) {
+                e.printStackTrace();
             }
         }
 
-        result.setTitle(doc.select("h1").first().text());
         for (Element tr : doc.select(".titleinfo tr")) {
             // Sometimes there is one th and one td, sometimes two tds
             String detailName = tr.select("th, td").first().text().trim();
+            if (detailName.endsWith(":")) {
+                detailName = detailName.substring(0, detailName.length() - 1);
+            }
             String detailValue = tr.select("td").last().text().trim();
             result.addDetail(new Detail(detailName, detailValue));
-            if (detailName.contains("ID in diesem Katalog")) {
+            if (detailName.contains("ID in diesem Katalog") && result.getId() == null) {
                 result.setId(detailValue);
+            }
+            if (detailName.equals("Titel")) {
+                result.setTitle(detailValue);
             }
         }
         if (result.getDetails().size() == 0 && doc.select("#details").size() > 0) {
@@ -650,6 +697,9 @@ public class TouchPoint extends BaseApi implements OpacApi {
                     if (in_value) {
                         if (dname.length() > 0 && dval.length() > 0) {
                             result.addDetail(new Detail(dname, dval));
+                            if (dname.equals("Titel")) {
+                                result.setTitle(dval);
+                            }
                         }
                         dname = ((Element) n).text();
                         in_value = false;
@@ -676,35 +726,53 @@ public class TouchPoint extends BaseApi implements OpacApi {
 
         }
 
+        if (result.getTitle() == null) {
+            result.setTitle(doc.select("h1").first().text());
+        }
+
         // Copies
-        String copiesParameter = doc.select("div[id^=ajax_holdings_url")
-                                    .attr("ajaxParameter").replace("&amp;", "");
+        String copiesParameter = doc.select("div[id^=ajax_holdings_url]")
+                                    .attr("ajaxParameter");
+        if ("".equals(copiesParameter)) {
+            copiesParameter = doc.select("div[id^=ajax_holdings_url]")
+                                 .attr("data-ajaxParameter");
+        }
+        copiesParameter = copiesParameter.replace("&amp;", "");
         if (!"".equals(copiesParameter)) {
             String copiesHtml = httpGet(opac_url + "/" + copiesParameter,
                     ENCODING);
             Document copiesDoc = Jsoup.parse(copiesHtml);
             List<String> table_keys = new ArrayList<>();
-            for (Element th : copiesDoc.select(".data tr th")) {
-                if (th.text().contains("Zweigstelle")) {
+
+            // newer versions (e.g. Chemnitz) use divs instead of tables
+            boolean table = copiesDoc.select(".data tr th").size() > 0;
+
+            for (Element th : copiesDoc.select(table ? ".data tr th" : ".data div.d-none > div, .data > div:first-child > div.row:first-child > div")) {
+                if (th.text().contains("Zweigstelle") || th.text().contains("Campus")) {
                     table_keys.add("branch");
-                } else if (th.text().contains("Status")) {
+                } else if (th.text().contains("Status") || th.text().contains("Leihstatus")) {
                     table_keys.add("status");
                 } else if (th.text().contains("Signatur")) {
                     table_keys.add("signature");
+                } else if (th.text().contains("Mediennummer")) {
+                    table_keys.add("barcode");
                 } else {
                     table_keys.add(null);
                 }
             }
-            for (Element tr : copiesDoc.select(".data tr:has(td)")) {
+            for (Element tr : copiesDoc
+                    .select(table ? ".data tr:has(td)" : ".data > div > div:not(.d-none):not(:first-child)")) {
                 Copy copy = new Copy();
                 int i = 0;
-                for (Element td : tr.select("td")) {
+                for (Element td : tr.select(table ? "td" : "> div")) {
                     if (table_keys.get(i) != null) {
                         copy.set(table_keys.get(i), td.text().trim());
                     }
                     i++;
                 }
-                result.addCopy(copy);
+                if (copy.notEmpty()) {
+                    result.addCopy(copy);
+                }
             }
         }
 
@@ -717,10 +785,20 @@ public class TouchPoint extends BaseApi implements OpacApi {
                         + reservationParameter, ENCODING);
                 Document reservationDoc = Jsoup.parse(reservationHtml);
                 reservationDoc.setBaseUri(opac_url);
-                if (reservationDoc.select("a").size() == 1) {
+                if (reservationDoc.select("a[href*=requestItem.do]").size() == 1) {
                     result.setReservable(true);
-                    result.setReservation_info(reservationDoc.select("a")
-                                                             .first().attr("abs:href"));
+                    result.setReservation_info(
+                            reservationDoc.select("a[href*=requestItem.do]")
+                                          .first().attr("abs:href"));
+                } else if (reservationDoc.select("form[action*=requestItem.do]").size() == 1) {
+                    // seen at UB Erlangen-Nürnberg
+                    result.setReservable(true);
+                    Element form = reservationDoc.select("form[action*=requestItem.do]").first();
+                    HttpUrl.Builder url = HttpUrl.parse(form.absUrl("action")).newBuilder();
+                    for (Element input : form.select("input[type=hidden]")) {
+                        url.addQueryParameter(input.attr("name"), input.val());
+                    }
+                    result.setReservation_info(url.build().toString());
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -761,24 +839,51 @@ public class TouchPoint extends BaseApi implements OpacApi {
         return result;
     }
 
+    private String findCoverUrl(Element elem, boolean small) throws IOException {
+        String cover = null;
+        if (elem.select("#cover script, .cover script, .results script").size() > 0) {
+            String js = elem.select("#cover script, .cover script, .results script").first().html();
+            String isbn = matchJSVariable(js, "isbn");
+            String ajaxUrl = matchJSVariable(js, "ajaxUrl");
+            if (ajaxUrl == null) {
+                ajaxUrl = matchJSParameter(js, "url");
+            }
+            if (ajaxUrl != null && !"".equals(ajaxUrl)) {
+                if (!"".equals(isbn) && isbn != null) {
+                    String url = new URL(new URL(opac_url + "/"), ajaxUrl)
+                            .toString();
+                    String coverUrl = httpGet(url + "?isbn=" + isbn
+                            + "&size=" + (small ? "small" : "medium"), ENCODING);
+                    if (!"".equals(coverUrl)) {
+                        cover = coverUrl.replace("\r\n", "").trim();
+                    }
+                } else {
+                    String url = new URL(new URL(opac_url + "/"), ajaxUrl).toString();
+                    String coverJs = httpGet(url, ENCODING);
+                    String coverUrl = matchJSVariable(coverJs, "imgSrc"); // seen in Chemnitz
+                    if (coverUrl != null) {
+                        coverUrl = new URL(new URL(opac_url + "/"), coverUrl).toString();
+                        cover = coverUrl;
+                    } else {
+                        cover = matchHTMLAttr(coverJs, "src");
+                    }
+                }
+            }
+        }
+        return cover;
+    }
+
     @Override
-    public ReservationResult reservation(DetailledItem item, Account acc,
+    public ReservationResult reservation(DetailedItem item, Account acc,
             int useraction, String selection) throws IOException {
-        if (System.currentTimeMillis() - logged_in > SESSION_LIFETIME
-                || logged_in_as == null) {
-            try {
-                login(acc);
-            } catch (OpacErrorException e) {
-                return new ReservationResult(MultiStepResult.Status.ERROR,
-                        e.getMessage());
-            }
-        } else if (logged_in_as.getId() != acc.getId()) {
-            try {
-                login(acc);
-            } catch (OpacErrorException e) {
-                return new ReservationResult(MultiStepResult.Status.ERROR,
-                        e.getMessage());
-            }
+        // Earlier, this place used some logic to find out whether it needed to re-login or not
+        // before starting the reservation. Because this didn't work, it now simply logs in every
+        // time.
+        try {
+            login(acc);
+        } catch (OpacErrorException e) {
+            return new ReservationResult(MultiStepResult.Status.ERROR,
+                    e.getMessage());
         }
         String html;
         if (reusehtml_reservation != null) {
@@ -790,13 +895,15 @@ public class TouchPoint extends BaseApi implements OpacApi {
         if (doc.select(".message-error").size() > 0) {
             return new ReservationResult(MultiStepResult.Status.ERROR, doc
                     .select(".message-error").first().text());
+        } else if (doc.select(".message-confirm").size() > 0) {
+            // if no further inputs are needed, reservation is already finished here
+            // seen in HS Augsburg
+            return new ReservationResult(MultiStepResult.Status.OK);
         }
-        List<NameValuePair> nameValuePairs = new ArrayList<>();
-        nameValuePairs
-                .add(new BasicNameValuePair("methodToCall", "requestItem"));
+        FormBody.Builder body = new FormBody.Builder();
+        body.add("methodToCall", "requestItem");
         if (doc.select("#newNeedBeforeDate").size() > 0) {
-            nameValuePairs.add(new BasicNameValuePair("newNeedBeforeDate", doc
-                    .select("#newNeedBeforeDate").val()));
+            body.add("newNeedBeforeDate", doc.select("#newNeedBeforeDate").val());
         }
         if (doc.select("select[name=location] option").size() > 0
                 && selection == null) {
@@ -815,12 +922,13 @@ public class TouchPoint extends BaseApi implements OpacApi {
             reusehtml_reservation = html;
             return res;
         } else if (selection != null) {
-            nameValuePairs.add(new BasicNameValuePair("location", selection));
+            body.add("location", selection);
             reusehtml_reservation = null;
         }
 
-        html = httpPost(opac_url + "/requestItem.do", new UrlEncodedFormEntity(
-                nameValuePairs), ENCODING);
+        body.add("submited", "true"); // sic!
+
+        html = httpPost(opac_url + "/requestItem.do", body.build(), ENCODING);
         doc = Jsoup.parse(html);
         if (doc.select(".message-confirm").size() > 0) {
             return new ReservationResult(MultiStepResult.Status.OK);
@@ -881,7 +989,45 @@ public class TouchPoint extends BaseApi implements OpacApi {
     @Override
     public CancelResult cancel(String media, Account account, int useraction,
             String selection) throws IOException, OpacErrorException {
-        return null;
+        if (!initialised) {
+            start();
+        }
+        if (System.currentTimeMillis() - logged_in > SESSION_LIFETIME
+                || logged_in_as == null) {
+            try {
+                account(account);
+            } catch (JSONException e) {
+                e.printStackTrace();
+                return new CancelResult(MultiStepResult.Status.ERROR);
+            } catch (OpacErrorException e) {
+                return new CancelResult(MultiStepResult.Status.ERROR, e.getMessage());
+            }
+        } else if (logged_in_as.getId() != account.getId()) {
+            try {
+                account(account);
+            } catch (JSONException e) {
+                e.printStackTrace();
+                return new CancelResult(MultiStepResult.Status.ERROR);
+            } catch (OpacErrorException e) {
+                return new CancelResult(MultiStepResult.Status.ERROR, e.getMessage());
+            }
+        }
+        // We have to call the page we found the link originally on first
+        httpGet(opac_url
+                        + "/userAccount.do?methodToCall=showAccount&accountTyp=requested",
+                ENCODING);
+        // TODO: Check that the right media is prolonged (the links are
+        // index-based and the sorting could change)
+        String html = httpGet(opac_url + "/cancelReservation.do?" + media, ENCODING);
+        Document doc = Jsoup.parse(html);
+        if (doc.select(".message-confirm").size() > 0) {
+            return new CancelResult(MultiStepResult.Status.OK);
+        } else if (doc.select(".alert").size() > 0) {
+            return new CancelResult(MultiStepResult.Status.ERROR, doc
+                    .select(".alert").first().text());
+        } else {
+            return new CancelResult(MultiStepResult.Status.ERROR);
+        }
     }
 
     @Override
@@ -918,7 +1064,16 @@ public class TouchPoint extends BaseApi implements OpacApi {
                 if (!page.hasAttr("href")) {
                     continue;
                 }
-                html = httpGet(page.attr("abs:href"), ENCODING);
+                String url = page.attr("abs:href");
+                Map<String, String> params = getQueryParamsFirst(url);
+                if (params.containsKey("anzPos")) {
+                    // Prevent fetching, backwards, first page again, or "last page"/"next page" links
+                    Integer anzPos = Integer.valueOf(params.get("anzPos"));
+                    if (anzPos <= 1 || page.select("svg").size() > 0) {
+                        continue;
+                    }
+                }
+                html = httpGet(url, ENCODING);
                 doc = Jsoup.parse(html);
                 doc.setBaseUri(opac_url);
                 nextpageLent = parse_medialist(doc);
@@ -947,7 +1102,16 @@ public class TouchPoint extends BaseApi implements OpacApi {
                 if (!page.hasAttr("href")) {
                     continue;
                 }
-                html = httpGet(page.attr("abs:href"), ENCODING);
+                String url = page.attr("abs:href");
+                Map<String, String> params = getQueryParamsFirst(url);
+                if (params.containsKey("anzPos")) {
+                    // Prevent fetching, backwards, first page again, or "last page"/"next page" links
+                    Integer anzPos = Integer.valueOf(params.get("anzPos"));
+                    if (anzPos <= 1 || page.select("svg").size() > 0) {
+                        continue;
+                    }
+                }
+                html = httpGet(url, ENCODING);
                 doc = Jsoup.parse(html);
                 doc.setBaseUri(opac_url);
                 nextpageRes = parse_reslist(doc);
@@ -973,7 +1137,16 @@ public class TouchPoint extends BaseApi implements OpacApi {
                 if (!page.hasAttr("href")) {
                     continue;
                 }
-                html = httpGet(page.attr("abs:href"), ENCODING);
+                String url = page.attr("abs:href");
+                Map<String, String> params = getQueryParamsFirst(url);
+                if (params.containsKey("anzPos")) {
+                    // Prevent fetching, backwards, first page again, or "last page"/"next page" links
+                    Integer anzPos = Integer.valueOf(params.get("anzPos"));
+                    if (anzPos <= 1 || page.select("svg").size() > 0) {
+                        continue;
+                    }
+                }
+                html = httpGet(url, ENCODING);
                 doc = Jsoup.parse(html);
                 doc.setBaseUri(opac_url);
                 nextpageOrd = parse_reslist(doc);
@@ -1001,7 +1174,7 @@ public class TouchPoint extends BaseApi implements OpacApi {
 
     static List<LentItem> parse_medialist(Document doc) {
         List<LentItem> media = new ArrayList<>();
-        Elements copytrs = doc.select(".data tr");
+        Elements copytrs = doc.select(".data tr, .data .row");
 
         DateTimeFormatter fmt = DateTimeFormat.forPattern("dd.MM.yyyy").withLocale(Locale.GERMAN);
 
@@ -1020,12 +1193,56 @@ public class TouchPoint extends BaseApi implements OpacApi {
             item.setTitle(tr.select(".account-display-title").select("b, strong")
                             .text().trim());
             try {
-                item.setAuthor(tr.select(".account-display-title").html().split("<br[ /]*>")[1].trim());
+                item.setRenewable(false);
+                if (tr.select("a").size() > 0) {
+                    for (Element link : tr.select("a")) {
+                        String href = link.attr("abs:href");
+                        Map<String, String> hrefq = getQueryParamsFirst(href);
+                        if (hrefq.containsKey("q")) {
+                            item.setId(extractIdFromQ(hrefq.get("q")));
+                        } else if ("renewal".equals(hrefq.get("methodToCall"))) {
+                            item.setProlongData(href.split("\\?")[1]);
+                            item.setRenewable(true);
+                            link.remove();
+                            break;
+                        }
+                    }
+                }
+
+                String[] lines = tr.select(".account-display-title").html().split("<br[ /]*>");
+                if (lines.length == 4 || lines.length == 5) {
+                    // Winterthur
+                    item.setAuthor(Jsoup.parse(lines[1]).text().trim());
+                    item.setBarcode(Jsoup.parse(lines[2]).text().trim());
+                    if (lines.length == 5) {
+                        // Chemnitz
+                        item.setStatus(Jsoup.parse(lines[3] + " " + lines[4]).text().trim());
+                    } else {
+                        // Winterthur
+                        item.setStatus(Jsoup.parse(lines[3]).text().trim());
+                    }
+                } else if (lines.length == 3) {
+                    // We can't really tell the difference between missing author and missing
+                    // shelfmark. However, all items have shelfmarks, not all have authors.
+                    item.setBarcode(Parser.unescapeEntities(lines[1].trim(), false));
+                    item.setStatus(Parser.unescapeEntities(lines[2].trim(), false));
+                } else if (lines.length == 2) {
+                    item.setAuthor(Parser.unescapeEntities(lines[1].trim(), false));
+                } else if (lines.length > 5) {
+                    // Chemnitz 2019
+                    if (lines[2].contains("&nbsp;/&nbsp;")) {
+                        item.setAuthor(Jsoup.parse(lines[1]).text().trim());
+                        item.setBarcode(Jsoup.parse(lines[2]).text().trim());
+                    } else {
+                        item.setBarcode(Jsoup.parse(lines[1]).text().trim());
+                    }
+                }
 
                 String[] col3split = tr.select(".account-display-state").html().split("<br[ /]*>");
                 String deadline = Jsoup.parse(col3split[0].trim()).text().trim();
                 if (deadline.contains(":")) {
-                    // BSB Munich: <span class="hidden-sm hidden-md hidden-lg">Fälligkeitsdatum : </span>26.02.2016<br>
+                    // BSB Munich: <span class="hidden-sm hidden-md hidden-lg">Fälligkeitsdatum :
+                    // </span>26.02.2016<br>
                     deadline = deadline.split(":")[1].trim();
                 }
                 if (deadline.contains("-")) {
@@ -1041,18 +1258,6 @@ public class TouchPoint extends BaseApi implements OpacApi {
 
                 if (col3split.length > 1) item.setHomeBranch(col3split[1].trim());
 
-                if (tr.select("a").size() > 0) {
-                    for (Element link : tr.select("a")) {
-                        String href = link.attr("abs:href");
-                        Map<String, String> hrefq = getQueryParamsFirst(href);
-                        if (hrefq.get("methodToCall").equals("renewal")) {
-                            item.setProlongData(href.split("\\?")[1]);
-                            item.setRenewable(true);
-                            break;
-                        }
-                    }
-                }
-
             } catch (Exception ex) {
                 ex.printStackTrace();
             }
@@ -1062,9 +1267,29 @@ public class TouchPoint extends BaseApi implements OpacApi {
         return media;
     }
 
+    private static String extractIdFromQ(String q) {
+        Pattern pattern = Pattern.compile("(\\d+)=\"(?:\\\\\")?([^\\\\]+)(?:\\\\\")?\" IN \\[" +
+                "(\\d+)\\]");
+        Matcher matcher = pattern.matcher(q);
+        if (matcher.find()) {
+            JSONObject id = new JSONObject();
+            try {
+                id.put("field", matcher.group(1));
+                id.put("id", matcher.group(2));
+                id.put("db", matcher.group(3));
+                return id.toString();
+            } catch (JSONException e) {
+                e.printStackTrace();
+                return null;
+            }
+        } else {
+            return null;
+        }
+    }
+
     static List<ReservedItem> parse_reslist(Document doc) {
         List<ReservedItem> reservations = new ArrayList<>();
-        Elements copytrs = doc.select(".data tr");
+        Elements copytrs = doc.select(".data tr, #account-data .table tr, .data .row");
         int trs = copytrs.size();
         if (trs <= 1) {
             return null;
@@ -1077,14 +1302,44 @@ public class TouchPoint extends BaseApi implements OpacApi {
                 return null;
             }
 
-            item.setTitle(tr.child(2).select("b, strong").text().trim());
             try {
-                String[] rowsplit2 = tr.child(2).html().split("<br[ /]*>");
-                String[] rowsplit3 = tr.child(3).html().split("<br[ /]*>");
-                if (rowsplit2.length > 1) item.setAuthor(rowsplit2[1].trim());
-                if (rowsplit3.length > 2) item.setBranch(rowsplit3[2].trim());
+                String[] rowsplit2;
+                String[] rowsplit3;
+                if (tr.hasClass("row")) {
+                    // Chemnitz 2019
+                    item.setTitle(
+                            tr.select(".account-display-title").select("b, strong").text().trim());
+
+                    rowsplit2 = tr.select(".account-display-title > div").first().html().split("<br[ /]*>");
+                    rowsplit3 =
+                            tr.select(".account-display-state").last().html().split("<br[ /]*>");
+                } else {
+                    item.setTitle(
+                            tr.child(2).select("b, strong").text().trim());
+                    rowsplit2 = tr.child(2).html().split("<br[ /]*>");
+                    rowsplit3 = tr.child(3).html().split("<br[ /]*>");
+                }
+                if (rowsplit2.length > 1) {
+                    item.setAuthor(rowsplit2[1].replace("</a>", "").trim());
+                }
+                if (rowsplit3.length > 2) {
+                    item.setBranch(rowsplit3[2].replace("</a>", "").trim());
+                }
                 if (rowsplit3.length > 2) {
                     item.setStatus(rowsplit3[0].trim() + " (" + rowsplit3[1].trim() + ")");
+                }
+
+                if (tr.select("a").size() > 0) {
+                    for (Element link : tr.select("a")) {
+                        String href = link.attr("abs:href");
+                        Map<String, String> hrefq = getQueryParamsFirst(href);
+                        if (hrefq.containsKey("q")) {
+                            item.setId(extractIdFromQ(hrefq.get("q")));
+                        } else if ("cancel".equals(hrefq.get("methodToCall"))) {
+                            item.setCancelData(href.split("\\?")[1]);
+                            break;
+                        }
+                    }
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -1098,7 +1353,7 @@ public class TouchPoint extends BaseApi implements OpacApi {
     protected LoginResponse login(Account acc) throws OpacErrorException, IOException {
         String html;
 
-        List<NameValuePair> nameValuePairs = new ArrayList<>();
+        FormBody.Builder body = new FormBody.Builder();
 
         try {
             httpGet(opac_url + "/login.do", ENCODING);
@@ -1106,29 +1361,36 @@ public class TouchPoint extends BaseApi implements OpacApi {
             e1.printStackTrace();
         }
 
-        nameValuePairs.add(new BasicNameValuePair("username", acc.getName()));
-        nameValuePairs
-                .add(new BasicNameValuePair("password", acc.getPassword()));
-        nameValuePairs.add(new BasicNameValuePair("CSId", CSId));
-        nameValuePairs.add(new BasicNameValuePair("methodToCall", "submit"));
-        nameValuePairs.add(new BasicNameValuePair("login_action", "Login"));
-        html = httpPost(opac_url + "/login.do", new UrlEncodedFormEntity(
-                nameValuePairs), ENCODING);
+        body.add("username", acc.getName());
+        body.add("password", acc.getPassword());
+        body.add("CSId", CSId);
+        body.add("methodToCall", "submit");
+        body.add("login_action", "Login");
+        html = httpPost(opac_url + "/login.do", body.build(), ENCODING);
 
         Document doc = Jsoup.parse(html);
 
         if (doc.getElementsByClass("alert").size() > 0) {
-            if (doc.select(".alert").text().contains("Nutzungseinschr") &&
+            String message = doc.select(".alert").get(0).text();
+            if ((message.contains("Nutzungseinschr") || message.contains("Datenbankauswahl")) &&
                     doc.select("a[href*=methodToCall=done]").size() > 0) {
                 // This is a warning that we need to acknowledge, it will be shown in the account
                 // view
                 httpGet(opac_url + "/login.do?methodToCall=done", ENCODING);
                 logged_in = System.currentTimeMillis();
                 logged_in_as = acc;
-                return new LoginResponse(true, doc.getElementsByClass("alert").get(0).text());
+
+                boolean showMessage = message.contains("Nutzungseinschr");
+                return new LoginResponse(true, showMessage ? message : null);
             } else {
                 throw new OpacErrorException(doc.getElementsByClass("alert").get(0).text());
             }
+        }
+
+        Element changePasswordForm =
+                doc.select("form[action$=methodToCall=changePassword]").first();
+        if (changePasswordForm != null) {
+            throw new OpacErrorException(stringProvider.getString("please_change_password"));
         }
 
         logged_in = System.currentTimeMillis();
@@ -1140,18 +1402,7 @@ public class TouchPoint extends BaseApi implements OpacApi {
     @Override
     public String getShareUrl(String id, String title) {
         try {
-            try {
-                JSONObject json = new JSONObject(id);
-                return opac_url
-                        + "/perma.do?q="
-                        + URLEncoder.encode("0=\"" + json.getString("id")
-                                + "\" IN [" + json.getString("db") + "]",
-                        "UTF-8");
-            } catch (JSONException e) {
-                // backwards compatibility
-                return opac_url + "/perma.do?q="
-                        + URLEncoder.encode("0=\"" + id + "\" IN [2]", "UTF-8");
-            }
+            return getUrlForId(id);
         } catch (UnsupportedEncodingException e) {
             e.printStackTrace();
             return null;
@@ -1160,7 +1411,7 @@ public class TouchPoint extends BaseApi implements OpacApi {
 
     @Override
     public int getSupportFlags() {
-        int flags = SUPPORT_FLAG_CHANGE_ACCOUNT;
+        int flags = SUPPORT_FLAG_CHANGE_ACCOUNT | SUPPORT_FLAG_ACCOUNT_PROLONG_ALL;
         flags |= SUPPORT_FLAG_ENDLESS_SCROLLING;
         return flags;
     }
@@ -1168,6 +1419,38 @@ public class TouchPoint extends BaseApi implements OpacApi {
     @Override
     public ProlongAllResult prolongAll(Account account, int useraction,
             String selection) throws IOException {
+        if (!initialised) {
+            start();
+        }
+        if (System.currentTimeMillis() - logged_in > SESSION_LIFETIME
+                || logged_in_as == null || logged_in_as.getId() != account.getId()) {
+            try {
+                login(account);
+            } catch (OpacErrorException e) {
+                return new ProlongAllResult(MultiStepResult.Status.ERROR,
+                        e.getMessage());
+            }
+        }
+        // We have to call the page we found the link originally on first
+        httpGet(opac_url
+                        + "/userAccount.do?methodToCall=showAccount&accountTyp=loaned",
+                ENCODING);
+                String html = httpGet(opac_url + "/renewal.do?methodToCall=accountRenewal", ENCODING);
+        Document doc = Jsoup.parse(html);
+        if (doc.select(".message-confirm, .message-info").size() > 0) {
+            return new ProlongAllResult(MultiStepResult.Status.OK,
+                    doc.select(".message-info").first().text());
+        } else if (doc.select(".alert").size() > 0) {
+            return new ProlongAllResult(MultiStepResult.Status.ERROR, doc
+                    .select(".alert").first().text());
+        } else {
+            return new ProlongAllResult(MultiStepResult.Status.ERROR);
+        }
+    }
+
+    @Override
+    public ProlongAllResult prolongMultiple(List<String> media,
+            Account account, int useraction, String selection) throws IOException {
         return null;
     }
 
@@ -1198,7 +1481,7 @@ public class TouchPoint extends BaseApi implements OpacApi {
         return null;
     }
 
-    private class LoginResponse {
+    class LoginResponse {
         public boolean success;
         public String warning;
 

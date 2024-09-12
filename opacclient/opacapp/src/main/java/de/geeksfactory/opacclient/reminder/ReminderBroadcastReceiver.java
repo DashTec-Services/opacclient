@@ -1,13 +1,14 @@
 package de.geeksfactory.opacclient.reminder;
 
+import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.preference.PreferenceManager;
-import android.support.v4.app.NotificationCompat;
+import android.graphics.Color;
+import androidx.preference.PreferenceManager;
 import android.util.Log;
 
 import org.joda.time.DateTime;
@@ -22,20 +23,21 @@ import org.joda.time.format.PeriodFormat;
 import java.util.ArrayList;
 import java.util.List;
 
+import androidx.core.app.NotificationCompat;
 import de.geeksfactory.opacclient.BuildConfig;
 import de.geeksfactory.opacclient.OpacClient;
 import de.geeksfactory.opacclient.R;
 import de.geeksfactory.opacclient.frontend.SnoozeDatePickerActivity;
 import de.geeksfactory.opacclient.objects.LentItem;
 import de.geeksfactory.opacclient.storage.AccountDataSource;
+import de.geeksfactory.opacclient.storage.DataIntegrityException;
 
 public class ReminderBroadcastReceiver extends BroadcastReceiver {
     public static final String EXTRA_ALARM_ID = "alarmId";
     public static final String ACTION_SHOW_NOTIFICATION = "show";
     public static final String ACTION_NOTIFICATION_DELETED = "deleted";
-    public static final String ACTION_NOTIFICATION_SNOOZE = "snooze";
-    public static final String ACTION_NOTIFICATION_CLICK = "click";
     public static final String ACTION_NOTIFICATION_DONT_REMIND_AGAIN = "dontremindagain";
+    public static final String NOTIFICATION_CHANNEL_REMINDER = "reminder";
     private static final String LOG_TAG = "ReminderBroadcastRcvr";
 
     private AccountDataSource adata;
@@ -44,6 +46,25 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
     private Intent intent;
     private SharedPreferences prefs;
 
+    private void setUpChannel() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) {
+            return;
+        }
+        NotificationChannel channel = new NotificationChannel(
+                NOTIFICATION_CHANNEL_REMINDER,
+                context.getString(R.string.notification_channel),
+                NotificationManager.IMPORTANCE_DEFAULT
+        );
+        channel.enableLights(true);
+        channel.setLightColor(Color.RED);
+        channel.enableVibration(false);
+        channel.setSound(null, null);
+
+        NotificationManager notificationManager = (NotificationManager) context
+                .getSystemService(Context.NOTIFICATION_SERVICE);
+        notificationManager.createNotificationChannel(channel);
+    }
+
     @Override
     public void onReceive(Context context, Intent intent) {
         this.context = context;
@@ -51,11 +72,9 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
         this.prefs = PreferenceManager.getDefaultSharedPreferences(context);
 
         adata = new AccountDataSource(context);
-        adata.open();
         alarm = adata.getAlarm(intent.getLongExtra(EXTRA_ALARM_ID, -1));
 
         if (alarm == null) {
-            adata.close();
             return;
         }
 
@@ -66,22 +85,17 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
             case ACTION_NOTIFICATION_DELETED:
                 notificationDeleted();
                 break;
-            case ACTION_NOTIFICATION_SNOOZE:
-                notificationSnooze();
-                break;
-            case ACTION_NOTIFICATION_CLICK:
-                notificationClick();
-                break;
             case ACTION_NOTIFICATION_DONT_REMIND_AGAIN:
                 notificationDontRemindAgain();
                 break;
         }
-        adata.close();
         // reschedule alarms
         new ReminderHelper((OpacClient) context.getApplicationContext()).scheduleAlarms();
     }
 
     private void showNotification() {
+        setUpChannel();
+
         if (!prefs.getBoolean("notification_service", false)) {
             if (BuildConfig.DEBUG) Log.i(LOG_TAG, "not showing notification because disabled");
             return;
@@ -94,28 +108,45 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
         }
         if (BuildConfig.DEBUG) Log.i(LOG_TAG, "showing notification");
 
-        alarm.notified = true;
-        adata.updateAlarm(alarm);
-
         List<LentItem> expiringItems = new ArrayList<>();
+        List<Long> updatedItemIds = new ArrayList<>();
+
         for (long mediaId : alarm.media) {
-            expiringItems.add(adata.getLentItem(mediaId));
+            LentItem item = adata.getLentItem(mediaId);
+            if (item == null) {
+                if (BuildConfig.DEBUG) {
+                    throw new DataIntegrityException(
+                            "Unknown media ID " + mediaId + " in alarm with deadline " +
+                                    alarm.deadline.toString());
+                }
+            } else {
+                expiringItems.add(item);
+                updatedItemIds.add(mediaId);
+            }
         }
+
+        if (expiringItems.size() == 0) {
+            adata.removeAlarm(alarm);
+            return;
+        }
+
+        alarm.media = listToLongArray(updatedItemIds);
 
         String notificationText;
         String notificationTitle;
         // You can still return the item on the day it expires on, so don't consider it to have
         // expired before the next day
         if (alarm.deadline.isBefore(LocalDate.now())) {
-            notificationText = context
-                    .getString(R.string.notif_ticker_expired, expiringItems.size());
+            notificationText = context.getResources().getQuantityString(
+                    R.plurals.notif_ticker_expired, expiringItems.size(), expiringItems.size());
             notificationTitle = context.getString(R.string.notif_title_expired);
         } else {
-            notificationText = context.getString(R.string.notif_ticker, expiringItems.size());
+            notificationText = context.getResources().getQuantityString(
+                    R.plurals.notif_ticker, expiringItems.size(), expiringItems.size());
             notificationTitle = context.getString(R.string.notif_title);
         }
 
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(context)
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_REMINDER)
                 .setContentTitle(notificationTitle)
                 .setContentText(notificationText).setTicker(notificationText);
 
@@ -132,27 +163,42 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
 
 
         builder.setStyle(style).setSmallIcon(R.drawable.ic_stat_notification)
-                .setWhen(alarm.deadline.toDateTimeAtStartOfDay().getMillis())
-                .setNumber(expiringItems.size())
-                .setColor(context.getResources().getColor(R.color.primary_red)).setSound(null)
-                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE);
+               .setWhen(alarm.deadline.toDateTimeAtStartOfDay().getMillis())
+               .setNumber(expiringItems.size())
+               .setColor(context.getResources().getColor(R.color.primary_red)).setSound(null)
+               .setVisibility(NotificationCompat.VISIBILITY_PRIVATE);
 
         // Intent for when notification is deleted
         Intent deleteIntent = new Intent(context, ReminderBroadcastReceiver.class);
         deleteIntent.setAction(ReminderBroadcastReceiver.ACTION_NOTIFICATION_DELETED);
         deleteIntent.putExtra(ReminderBroadcastReceiver.EXTRA_ALARM_ID, alarm.id);
-        PendingIntent deletePendingIntent = PendingIntent
-                .getBroadcast(context, (int) alarm.id, deleteIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT);
+        PendingIntent deletePendingIntent = null;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            deletePendingIntent = PendingIntent
+                    .getBroadcast(context, (int) alarm.id, deleteIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
+        } else {
+            deletePendingIntent = PendingIntent
+                    .getBroadcast(context, (int) alarm.id, deleteIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT);
+        }
         builder.setDeleteIntent(deletePendingIntent);
 
         // Intent for snooze button
-        Intent snoozeIntent = new Intent(context, ReminderBroadcastReceiver.class);
-        snoozeIntent.setAction(ReminderBroadcastReceiver.ACTION_NOTIFICATION_SNOOZE);
-        snoozeIntent.putExtra(ReminderBroadcastReceiver.EXTRA_ALARM_ID, alarm.id);
-        PendingIntent snoozePendingIntent = PendingIntent
-                .getBroadcast(context, (int) alarm.id, snoozeIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT);
+        Intent snoozeIntent = new Intent(context, SnoozeDatePickerActivity.class);
+        snoozeIntent.putExtra(EXTRA_ALARM_ID, alarm.id);
+        snoozeIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+
+        PendingIntent snoozePendingIntent = null;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            snoozePendingIntent = PendingIntent
+                    .getActivity(context, (int) alarm.id, snoozeIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
+        } else {
+            snoozePendingIntent = PendingIntent
+                    .getActivity(context, (int) alarm.id, snoozeIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT);
+        }
         builder.addAction(R.drawable.ic_action_alarms, context.getString(R.string.notif_snooze),
                 snoozePendingIntent);
 
@@ -160,42 +206,66 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
         Intent notAgainIntent = new Intent(context, ReminderBroadcastReceiver.class);
         notAgainIntent.setAction(ReminderBroadcastReceiver.ACTION_NOTIFICATION_DONT_REMIND_AGAIN);
         notAgainIntent.putExtra(ReminderBroadcastReceiver.EXTRA_ALARM_ID, alarm.id);
-        PendingIntent notAgainPendingIntent = PendingIntent
-                .getBroadcast(context, (int) alarm.id, notAgainIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT);
+        PendingIntent notAgainPendingIntent = null;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            notAgainPendingIntent = PendingIntent
+                    .getBroadcast(context, (int) alarm.id, notAgainIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
+        } else {
+            notAgainPendingIntent = PendingIntent
+                    .getBroadcast(context, (int) alarm.id, notAgainIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT);
+        }
         builder.addAction(R.drawable.ic_action_delete,
                 context.getString(R.string.notif_dont_remind_again), notAgainPendingIntent);
 
         // Intent for when notification is clicked
-        Intent clickIntent = new Intent(context, ReminderBroadcastReceiver.class);
-        clickIntent.setAction(ReminderBroadcastReceiver.ACTION_NOTIFICATION_CLICK);
-        clickIntent.putExtra(ReminderBroadcastReceiver.EXTRA_ALARM_ID, alarm.id);
-        PendingIntent clickPendingIntent = PendingIntent
-                .getBroadcast(context, (int) alarm.id, clickIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT);
+        Intent clickIntent = new Intent(context, ((OpacClient) context.getApplicationContext()).getMainActivity());
+        clickIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        clickIntent.putExtra(EXTRA_ALARM_ID, alarm.id);
+
+        PendingIntent clickPendingIntent = null;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            clickPendingIntent = PendingIntent
+                    .getActivity(context, (int) alarm.id, clickIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
+        } else {
+            clickPendingIntent = PendingIntent
+                    .getActivity(context, (int) alarm.id, clickIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT);
+        }
         builder.setContentIntent(clickPendingIntent);
 
 
         NotificationManager notificationManager = (NotificationManager) context
                 .getSystemService(Context.NOTIFICATION_SERVICE);
         notificationManager.notify((int) alarm.id, builder.build());
+
+        alarm.notified = true;
+        adata.updateAlarm(alarm);
+    }
+
+    private static long[] listToLongArray(List<Long> list) {
+        long[] array = new long[list.size()];
+        for (int i = 0; i < list.size(); i++) array[i] = list.get(i);
+        return array;
     }
 
     private void notificationDeleted() {
         if (prefs.getBoolean("notification_repeat", true)) {
-            snooze(calculateSnoozeDuration());
+            snooze(adata, alarm, calculateSnoozeDuration(alarm));
         } else {
-            finished();
+            finished(adata, alarm );
         }
     }
 
-    private void finished() {
+    public static void finished(AccountDataSource adata, Alarm alarm) {
         if (BuildConfig.DEBUG) Log.i(LOG_TAG, "alarm finished");
         alarm.finished = true;
         adata.updateAlarm(alarm);
     }
 
-    private ReadablePeriod calculateSnoozeDuration() {
+    public static ReadablePeriod calculateSnoozeDuration(Alarm alarm) {
         // we assume that the average library closes at 6 PM on the day the item expires
         Duration timeLeft = new Duration(alarm.deadline.toDateTime(new LocalTime(18, 0)),
                 DateTime.now());
@@ -210,14 +280,7 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
         }
     }
 
-    private void notificationSnooze() {
-        Intent intent = new Intent(context, SnoozeDatePickerActivity.class);
-        intent.putExtra(EXTRA_ALARM_ID, alarm.id);
-        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        context.startActivity(intent);
-    }
-
-    private void snooze(ReadablePeriod duration) {
+    public static void snooze(AccountDataSource adata, Alarm alarm, ReadablePeriod duration) {
         if (BuildConfig.DEBUG) {
             Log.i(LOG_TAG, "snoozing notification for " + PeriodFormat.wordBased().print(duration));
         }
@@ -226,25 +289,8 @@ public class ReminderBroadcastReceiver extends BroadcastReceiver {
         adata.updateAlarm(alarm);
     }
 
-    private void notificationClick() {
-        if (prefs.getBoolean("notification_repeat", true)) {
-            snooze(calculateSnoozeDuration());
-        } else {
-            finished();
-        }
-        Intent intent = new Intent(context,
-                ((OpacClient) context.getApplicationContext()).getMainActivity());
-        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        intent.putExtra(EXTRA_ALARM_ID, alarm.id);
-        context.startActivity(intent);
-
-        NotificationManager notificationManager = (NotificationManager) context
-                .getSystemService(Context.NOTIFICATION_SERVICE);
-        notificationManager.cancel((int) alarm.id);
-    }
-
     private void notificationDontRemindAgain() {
-        finished();
+        finished(adata, alarm);
         NotificationManager notificationManager = (NotificationManager) context
                 .getSystemService(Context.NOTIFICATION_SERVICE);
         notificationManager.cancel((int) alarm.id);

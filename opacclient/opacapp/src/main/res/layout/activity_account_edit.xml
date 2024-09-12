@@ -2,17 +2,18 @@
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical">
 
-    <android.support.v7.widget.Toolbar
+    <androidx.appcompat.widget.Toolbar
         android:id="@+id/toolbar"
-        android:layout_height="wrap_content"
         android:layout_width="match_parent"
-        android:minHeight="?attr/actionBarSize"
+        android:layout_height="wrap_content"
         android:background="?attr/colorPrimary"
         android:elevation="4dp"
+        android:minHeight="?attr/actionBarSize"
         android:theme="@style/ThemeOverlay.Opacapp.ActionBar"
         app:popupTheme="@style/ThemeOverlay.AppCompat.Light"/>
 
@@ -22,9 +23,9 @@
         android:foreground="@drawable/toolbar_shadow">
 
         <ProgressBar
+            android:id="@+id/progressBar"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:id="@+id/progressBar"
             android:layout_gravity="center"
             android:visibility="gone"/>
 
@@ -43,7 +44,8 @@
                     android:id="@+id/tvLibraryLabel"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/account_city"/>
+                    android:text="@string/account_city"
+                    android:textAppearance="@style/TextAppearance.MaterialComponents.Subtitle2" />
 
                 <TextView
                     android:id="@+id/tvCity"
@@ -51,83 +53,106 @@
                     android:layout_height="wrap_content"
                     android:layout_marginBottom="8dp"
                     android:layout_marginLeft="16dp"
-                    android:ems="10"/>
+                    android:layout_marginTop="4dp"
+                    android:ems="10"
+                    android:textAppearance="@style/TextAppearance.AppCompat.Body1"
+                    tools:text="Beispielstadt ·  Beispielbibliothek"/>
 
-                <RelativeLayout
-                    android:id="@+id/rlReplaced"
+                <include layout="@layout/replacedby"/>
+
+                <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="8dp"
-                    android:layout_marginTop="8dp"
-                    android:background="@color/note_replacedby"
-                    android:padding="4dp"
-                    android:visibility="gone">
+                    android:layout_marginBottom="16dp"
+                    app:helperText="@string/account_label_helper"
+                    app:helperTextEnabled="true">
 
-                    <ImageView
-                        android:id="@+id/ivReplacedStore"
-                        android:layout_width="wrap_content"
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etLabel"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_alignParentRight="true"
-                        android:layout_centerVertical="true"
-                        android:contentDescription="@string/playstore"
-                        android:src="@drawable/playstore"/>
+                        android:ems="10"
+                        android:hint="@string/account_label"
+                        android:singleLine="true">
+
+                        <requestFocus />
+                    </com.google.android.material.textfield.TextInputEditText>
+
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <RadioGroup
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:id="@+id/rgType"
+                    android:layout_marginBottom="8dp">
 
                     <TextView
-                        android:id="@+id/tvReplacedNote"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/account_type"
+                        android:textAppearance="@style/TextAppearance.MaterialComponents.Subtitle2" />
+
+                    <RadioButton
+                        android:id="@+id/rbWithCredentials"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_alignParentLeft="true"
-                        android:layout_centerVertical="true"
-                        android:layout_toLeftOf="@+id/ivReplacedStore"
-                        android:text="@string/replacedby"/>
-                </RelativeLayout>
+                        android:layout_weight="1"
+                        android:checked="true"
+                        android:text="@string/account_with_credentials" />
 
-                <TextView
-                    android:id="@+id/tvLabelLabel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/account_label"/>
+                    <RadioButton
+                        android:text="@string/account_anonymous"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:id="@+id/rbAnonymous"
+                        android:layout_weight="1"/>
 
-                <EditText
-                    android:id="@+id/etLabel"
+                </RadioGroup>
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/tilUsername"
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="8dp"
-                    android:ems="10"
-                    android:hint="@string/default_account_name"
-                    android:singleLine="true">
+                    android:layout_marginLeft="8dp"
+                    app:endIconContentDescription="@string/barcodes"
+                    app:endIconDrawable="@drawable/ic_barcode"
+                    app:endIconMode="custom"
+                    app:endIconTint="@null"
+                    app:startIconDrawable="@drawable/ic_account_24dp"
+                    app:startIconTint="@null">
 
-                    <requestFocus/>
-                </EditText>
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etName"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ems="10"
+                        android:hint="@string/account_nr"
+                        android:inputType="textNoSuggestions"
+                        android:singleLine="true" />
+                </com.google.android.material.textfield.TextInputLayout>
 
-                <TextView
-                    android:id="@+id/tvNameLabel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/account_nr"/>
-
-                <EditText
-                    android:id="@+id/etName"
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/tilPassword"
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="8dp"
-                    android:ems="10"
-                    android:inputType="textNoSuggestions"
-                    android:singleLine="true"/>
+                    android:layout_marginLeft="8dp"
+                    android:layout_marginTop="8dp"
+                    app:startIconDrawable="@drawable/ic_lock_24dp">
 
-                <TextView
-                    android:id="@+id/tvPasswordLabel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/account_password"/>
-
-                <EditText
-                    android:id="@+id/etPassword"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:ems="10"
-                    android:inputType="textPassword"
-                    android:singleLine="true"/>
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etPassword"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ems="10"
+                        android:hint="@string/account_password"
+                        android:imeOptions="actionDone"
+                        android:inputType="textPassword"
+                        android:singleLine="true" />
+                </com.google.android.material.textfield.TextInputLayout>
 
                 <TextView
                     android:id="@+id/no_ssl"
@@ -137,7 +162,8 @@
                     android:background="@color/warning"
                     android:padding="16dp"
                     android:text="@string/no_ssl"
-                    android:visibility="gone"/>
+                    android:visibility="gone"
+                    tools:visibility="visible"/>
             </LinearLayout>
 
         </ScrollView>

@@ -2,29 +2,27 @@
  * Copyright (C) 2013 by Johan von Forstner under the MIT license:
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), 
- * to deal in the Software without restriction, including without limitation 
- * the rights to use, copy, modify, merge, publish, distribute, sublicense, 
- * and/or sell copies of the Software, and to permit persons to whom the Software 
+ * of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the Software
  * is furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in 
+ * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
- * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, 
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+ * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
 package de.geeksfactory.opacclient.apis;
 
 import org.apache.http.NameValuePair;
-import org.apache.http.client.CookieStore;
 import org.apache.http.client.utils.URLEncodedUtils;
-import org.apache.http.impl.client.BasicCookieStore;
 import org.apache.http.message.BasicNameValuePair;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
@@ -56,7 +54,7 @@ import de.geeksfactory.opacclient.i18n.StringProvider;
 import de.geeksfactory.opacclient.networking.HttpClientFactory;
 import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Filter.Option;
 import de.geeksfactory.opacclient.objects.Library;
@@ -75,7 +73,7 @@ import de.geeksfactory.opacclient.utils.ISBNTools;
  * @author Johan von Forstner, 16.09.2013
  */
 
-public abstract class Pica extends BaseApi implements OpacApi {
+public abstract class Pica extends OkHttpBaseApi implements OpacApi {
 
     protected static HashMap<String, MediaType> defaulttypes = new HashMap<>();
     protected static HashMap<String, String> languageCodes = new HashMap<>();
@@ -113,12 +111,11 @@ public abstract class Pica extends BaseApi implements OpacApi {
     protected String db;
     protected String pwEncoded;
     protected String languageCode;
-    protected CookieStore cookieStore = new BasicCookieStore();
     protected String lor_reservations;
 
     @Override
-    public void init(Library lib, HttpClientFactory httpClientFactory) {
-        super.init(lib, httpClientFactory);
+    public void init(Library lib, HttpClientFactory httpClientFactory, boolean debug) {
+        super.init(lib, httpClientFactory, debug);
 
         this.library = lib;
         this.data = lib.getData();
@@ -209,7 +206,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
                 opac_url + "/LNG=" + getLang() + "/DB=" + db
                         + "/SET=1/TTL=1/CMD?"
                         + URLEncodedUtils.format(params, getDefaultEncoding()),
-                getDefaultEncoding(), false, cookieStore);
+                getDefaultEncoding());
 
         return parse_search(html, 1);
     }
@@ -219,7 +216,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
         String html = httpGet(
                 opac_url + "/LNG=" + getLang() + "/DB=" + db + "/SET=1/TTL=1"
                         + "/FAM?PPN=" + query.get("ppn"),
-                getDefaultEncoding(), false, cookieStore);
+                getDefaultEncoding());
         return parse_search(html, 1);
     }
 
@@ -268,7 +265,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
 
         if (results_total == 1) {
             // Only one result
-            DetailledItem singleResult = parse_result(html);
+            DetailedItem singleResult = parse_result(html);
             SearchResult sr = new SearchResult();
             sr.setType(getMediaTypeInSingleResult(html));
             sr.setInnerhtml("<b>" + singleResult.getTitle() + "</b><br>"
@@ -397,7 +394,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
         String html = httpGet(opac_url + "/LNG=" + getLang() + "/DB=" + db
                         + "/SET=" + searchSet + "/TTL=1/NXT?FRST="
                         + (((page - 1) * resultcount) + 1), getDefaultEncoding(),
-                false, cookieStore);
+                false);
         return parse_search(html, page);
     }
 
@@ -408,7 +405,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException {
 
         if (id == null && reusehtml != null) {
@@ -433,23 +430,23 @@ public abstract class Pica extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResult(int position) throws IOException {
+    public DetailedItem getResult(int position) throws IOException {
         if (!initialised) {
             start();
         }
         String html = httpGet(opac_url + "/LNG=" + getLang() + "/DB=" + db
                         + "/LNG=" + getLang() + "/SET=" + searchSet
                         + "/TTL=1/SHW?FRST=" + (position + 1), getDefaultEncoding(),
-                false, cookieStore);
+                false);
 
         return parse_result(html);
     }
 
-    protected DetailledItem parse_result(String html) {
+    protected DetailedItem parse_result(String html) {
         Document doc = Jsoup.parse(html);
         doc.setBaseUri(opac_url);
 
-        DetailledItem result = new DetailledItem();
+        DetailedItem result = new DetailedItem();
         for (Element a : doc.select("a[href*=PPN")) {
             Map<String, String> hrefq = getQueryParamsFirst(a
                     .absUrl("href"));
@@ -459,17 +456,15 @@ public abstract class Pica extends BaseApi implements OpacApi {
         }
 
         // GET COVER
-        if (doc.select("td.preslabel:contains(ISBN) + td.presvalue").size() > 0) {
+        if (doc.select("img[title=Titelbild]").size() > 0) {
+            result.setCover(doc.select("img[title=Titelbild]").first().absUrl("src"));
+        } else if (doc.select("td.preslabel:contains(ISBN) + td.presvalue").size() > 0) {
             Element isbnElement = doc.select(
                     "td.preslabel:contains(ISBN) + td.presvalue").first();
-            String isbn = "";
-            for (Node child : isbnElement.childNodes()) {
-                if (child instanceof TextNode) {
-                    isbn = ((TextNode) child).text().trim();
-                    break;
-                }
+            String isbn = isbnElement.text().trim();
+            if (!isbn.equals("")) {
+                result.setCover(ISBNTools.getAmazonCoverURL(isbn, true));
             }
-            result.setCover(ISBNTools.getAmazonCoverURL(isbn, true));
         }
 
         // GET TITLE AND SUBTITLE
@@ -488,8 +483,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
             if (slashPosition > 0) {
                 title = titleAndSubtitle.substring(0, slashPosition).trim();
                 String subtitle = titleAndSubtitle.substring(slashPosition + 1).trim();
-                result.addDetail(new Detail(stringProvider
-                        .getString(StringProvider.SUBTITLE), subtitle));
+                result.addDetail(new Detail("", subtitle));
             } else {
                 title = titleAndSubtitle;
             }
@@ -525,7 +519,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
             }
             String title = titleElem.text().replace("\u00a0", " ").trim();
 
-            if (element.select("hr").size() > 0)
+            if (element.select("hr").size() > 0 || element.text().trim().equals(""))
             // after the separator we get the copies
             {
                 break;
@@ -536,16 +530,24 @@ public abstract class Pica extends BaseApi implements OpacApi {
                 continue;
             }
             if (title.contains(":")) {
-                title = title.substring(0, title.indexOf(":")); // remove colon
+                title = title.substring(0, title.indexOf(":")).strip(); // remove colon
             }
-            result.addDetail(new Detail(title, detail));
 
-            if (element.select("a").size() == 1 &&
-                    !element.select("a").get(0).text().trim().equals("")) {
-                String url = element.select("a").first().absUrl("href");
-                if (!url.startsWith(opac_url)) {
-                    result.addDetail(
-                            new Detail(stringProvider.getString(StringProvider.LINK), url));
+            if (title.equals("Mehr zum Titel")) {
+                for (Element a : element.select("a")) {
+                    result.addDetail(new Detail(a.text(), a.absUrl("href")));
+                }
+            } else {
+
+                result.addDetail(new Detail(title, detail));
+
+                if (element.select("a").size() == 1 &&
+                        !element.select("a").get(0).text().trim().equals("")) {
+                    String url = element.select("a").first().absUrl("href");
+                    if (!url.startsWith(opac_url)) {
+                        result.addDetail(
+                                new Detail(stringProvider.getString(StringProvider.LINK), url));
+                    }
                 }
             }
 
@@ -562,7 +564,10 @@ public abstract class Pica extends BaseApi implements OpacApi {
 
         while (line < lines.size()) {
             Element element = lines.get(line);
-            if (element.select("hr").size() == 0) {
+            if (element.firstElementSibling() != null && element.firstElementSibling().select("[data-epn]").size() > 0) {
+                copy.setBarcode(element.firstElementSibling().select("[data-epn]").first().attr("data-epn"));
+            }
+            if (element.select("hr").size() == 0 && !element.text().trim().equals("")) {
                 Element titleElem = element.firstElementSibling();
                 String detail = element.text().trim();
                 String title = titleElem.text().replace("\u00a0", " ").trim();
@@ -575,24 +580,44 @@ public abstract class Pica extends BaseApi implements OpacApi {
                 if (title.contains("Standort")
                         || title.contains("Vorhanden in")
                         || title.contains("Location")) {
+                    element.select("a[id=vscout]").remove();  // Link to navigation in eg. HAWK
+                    detail = element.text().trim();
                     location += detail;
                 } else if (title.contains("Sonderstandort")) {
                     location += " - " + detail;
                 } else if (title.contains("Systemstelle")
+                        || title.contains("Sachgebiete")
                         || title.contains("Subject")) {
                     copy.setDepartment(detail);
                 } else if (title.contains("Fachnummer")
-                        || title.contains("locationnumber")) {
+                        || title.contains("locationnumber")
+                        || title.contains("Schlagwörter")) {
                     copy.setLocation(detail);
                 } else if (title.contains("Signatur")
                         || title.contains("Shelf mark")) {
                     copy.setShelfmark(detail);
-                } else if (title.contains("Anmerkung")) {
-                    location += " (" + detail + ")";
-                } else if (title.contains("Link")) {
+                } else if (title.contains("Anmerkung") || title.contains("Note")) {
+                    if (location.length() > 1) {
+                        location += " (" + detail + ")";
+                    } else {
+                        result.addDetail(new Detail(title.replace(":", "").trim(), detail));
+                    }
+                } else if (title.contains("Link") || title.contains("Volltext")) {
                     result.addDetail(new Detail(title.replace(":", "").trim(), detail));
+                } else if (title.contains("Leihfristende") || title.contains("Expiry date")) {
+                    DateTimeFormatter fmt =
+                            DateTimeFormat.forPattern("dd.MM.yyyy").withLocale(Locale.GERMAN);
+                    try {
+                        copy.setReturnDate(fmt.parseLocalDate(detail.trim()));
+                    } catch (IllegalArgumentException e) {
+                        e.printStackTrace();
+                    }
+                } else if (title.contains("Vormerkungen") || title.contains("Reservations")) {
+                    copy.setReservations(detail);
                 } else if (title.contains("Status")
                         || title.contains("Ausleihinfo")
+                        || title.contains("Aktuelle Verfügbarkeit")
+                        || title.contains("Current availability")
                         || title.contains("Ausleihstatus")
                         || title.contains("Request info")) {
                     // Find return date
@@ -610,7 +635,11 @@ public abstract class Pica extends BaseApi implements OpacApi {
                             copy.setStatus(detail);
                         }
                     } else {
-                        copy.setStatus(detail);
+                        if (copy.getStatus() != null && copy.getStatus().length() > 1) {
+                            copy.setStatus(copy.getStatus() + " / " + detail);
+                        } else {
+                            copy.setStatus(detail);
+                        }
                     }
                     // Get reservation info
                     if (element.select("a:has(img[src*=inline_arrow])").size() > 0) {
@@ -621,8 +650,9 @@ public abstract class Pica extends BaseApi implements OpacApi {
                         JSONObject reservation = new JSONObject();
                         try {
                             reservation.put("multi", multipleCopies);
-                            reservation.put("link", _extract_url(a.absUrl("href")));
+                            reservation.put("link", _extract_url(a));
                             reservation.put("desc", location);
+                            reservation.put("status", detail);
                             reservationInfo.put(reservation);
                         } catch (JSONException e1) {
                             e1.printStackTrace();
@@ -631,8 +661,15 @@ public abstract class Pica extends BaseApi implements OpacApi {
                     }
                 }
             } else {
-                copy.setBranch(location);
-                result.addCopy(copy);
+                if (element.select(".loader").size() > 0) {
+                    continue;
+                }
+                if (location.length() > 1) {
+                    copy.setBranch(location);
+                }
+                if (copy.notEmpty()) {
+                    result.addCopy(copy);
+                }
                 location = "";
                 copy = new Copy();
             }
@@ -640,8 +677,87 @@ public abstract class Pica extends BaseApi implements OpacApi {
         }
 
         if (copy.notEmpty()) {
-            copy.setBranch(location);
+            if (location.length() > 1) {
+                copy.setBranch(location);
+            }
             result.addCopy(copy);
+        }
+
+        // Alternative way to get copies
+
+        for (Element script : doc.select("script")) {
+            if (script.html().contains("opc4js.init")) {
+                // e.g. <script type="text/javascript">window.onload = function() { opc4js.init("/LBS_WS/availability", "2", "1002", "EN", "https://opac.lbs-hildesheim.gbv.de")
+                // }</script>
+                Pattern ptrn = Pattern.compile(".*opc4js\\.init\\(\"(.*)\", \"(.*)\", \"(.*)\", \"(.*)\", \"(.*)\"\\).*");
+                Matcher matcher = ptrn.matcher(script.html());
+                try {
+                    if (matcher.matches()) {
+                        JSONObject jsonObject =
+                                new JSONObject(httpGet(matcher.group(5) + matcher.group(1) + "/titleinfo?BES=" +
+                                                matcher.group(2) + "&LAN=" + matcher.group(4) +
+                                                "&USR=" + matcher.group(3) + "&PPN=" + result.getId(),
+                                        getDefaultEncoding(), false, "application/json"));
+
+                        JSONArray copies;
+                        try {
+                            copies = jsonObject.getJSONObject("copies").getJSONArray("copy");
+                        } catch (JSONException e) {
+                            copies = new JSONArray();
+                            copies.put(jsonObject.getJSONObject("copies").getJSONObject("copy"));
+                        }
+
+                        for (int copyi = 0; copyi < copies.length(); copyi++) {
+                            JSONObject jsonCopy = copies.getJSONObject(copyi);
+                            JSONObject jsonVolume = null;
+                            try {
+                                jsonVolume = jsonCopy.optJSONObject("volumes").getJSONObject("volume");
+                            } catch (NullPointerException | JSONException e) {
+                                try {
+                                    jsonVolume = jsonCopy.optJSONObject("volumes").getJSONArray("volume").getJSONObject(0);
+                                } catch (NullPointerException ee) {
+                                }
+                            }
+                            for (Copy copyy : result.getCopies()) {
+                                if (jsonCopy.getString("@epn").equals(copyy.getBarcode())) {
+                                    copy = copyy;
+                                    break;
+                                }
+                            }
+                            if (jsonVolume == null) {
+                                continue;
+                            }
+                            copy.setStatus(jsonCopy.optString("loanindication", "") + " / " + jsonVolume.optString("loanstatus", ""));
+                            if (jsonVolume.optLong("reservations", 0) > 0) {
+                                copy.setReservations(String.valueOf(jsonVolume.optLong("reservations", 0)));
+                            }
+                            if (jsonVolume.has("loanperiod")) {
+                                DateTimeFormatter fmt = DateTimeFormat.forPattern("dd.MM.yyyy").withLocale(Locale.GERMAN);
+                                copy.setReturnDate(fmt.parseLocalDate(jsonVolume.getString("loanperiod")));
+                            }
+                            if (jsonCopy.has("messages") && jsonCopy.getJSONObject("messages").has("message")) {
+                                try {
+                                    copy.setStatus(copy.getStatus() + " / " + jsonCopy.getJSONObject("messages").getString("message"));
+                                } catch (JSONException e) {
+                                    copy.setStatus(copy.getStatus() + " / " + jsonCopy.getJSONObject("messages").getJSONArray("message").getString(0));
+                                }
+                            }
+                            if (jsonCopy.has("actionurl")) {
+                                JSONObject reservation = new JSONObject();
+                                reservation.put("multi", true);
+                                reservation.put("link", jsonCopy.get("actionurl"));
+                                reservation.put("desc", copy.getBranch() != null ? copy.getBranch() : copy.getLocation());
+                                reservation.put("status", copy.getStatus());
+                                reservationInfo.put(reservation);
+                                result.setReservable(true);
+                            }
+                        }
+                        break;
+                    }
+                } catch (JSONException | IOException e) {
+                    e.printStackTrace();
+                }
+            }
         }
 
         if (reservationInfo.length() == 0) {
@@ -656,7 +772,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
                 JSONObject reservation = new JSONObject();
                 try {
                     reservation.put("multi", multipleCopies);
-                    reservation.put("link", _extract_url(a.attr("href")));
+                    reservation.put("link", _extract_url(a));
                     reservation.put("desc", location);
                     reservationInfo.put(reservation);
                 } catch (JSONException e1) {
@@ -679,7 +795,12 @@ public abstract class Pica extends BaseApi implements OpacApi {
         return result;
     }
 
-    private String _extract_url(String javascriptUrl) {
+    private String _extract_url(Element link) {
+        String javascriptUrl = link.absUrl("href");
+        if (javascriptUrl.isEmpty()) {
+            // absUrl does not work with javascript: links, obviously
+            javascriptUrl = link.attr("href");
+        }
         if (javascriptUrl.startsWith("javascript:")) {
             javascriptUrl = javascriptUrl.replaceAll("^javascript:PU\\('(.*)',(.*)\\)(.*)", "$1");
         }
@@ -692,7 +813,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
     }
 
     @Override
-    public List<SearchField> getSearchFields() throws IOException, JSONException {
+    public List<SearchField> parseSearchFields() throws IOException, JSONException {
         if (!initialised) {
             start();
         }
@@ -712,11 +833,11 @@ public abstract class Pica extends BaseApi implements OpacApi {
             field.setData(new JSONObject("{\"ADI\": false}"));
 
             Pattern pattern = Pattern
-                    .compile("\\[X?[A-Za-z]{2,3}:?\\]|\\(X?[A-Za-z]{2,3}:?\\)");
+                    .compile("(?: --- )?(\\[X?[A-Za-z]{2,3}:?\\]|\\(X?[A-Za-z]{2,3}:?\\))");
             Matcher matcher = pattern.matcher(field.getDisplayName());
             if (matcher.find()) {
                 field.getData().put("meaning",
-                        matcher.group().replace(":", "").toUpperCase());
+                        matcher.group(1).replace(":", "").toUpperCase());
                 field.setDisplayName(matcher.replaceFirst("").trim());
             }
 
@@ -731,6 +852,12 @@ public abstract class Pica extends BaseApi implements OpacApi {
             field.setId("SRT");
             for (Element option : sort.select("option")) {
                 field.addDropdownValue(option.attr("value"), option.text());
+                if ("RLV".equals(option.attr("value"))) {
+                    // move "relevance" option to the top to make it the default
+                    field.getDropdownValues().add(0,
+                            field.getDropdownValues().remove(
+                                    field.getDropdownValues().size() - 1));
+                }
             }
             fields.add(field);
         }
@@ -748,7 +875,7 @@ public abstract class Pica extends BaseApi implements OpacApi {
         for (Element dropdown : doc.select("select[name^=ADI]")) {
             DropdownSearchField field = new DropdownSearchField();
             field.setDisplayName(dropdown.parent().parent().select(".longkey")
-                    .text());
+                                         .text());
             field.setId(dropdown.attr("name"));
             for (Element option : dropdown.select("option")) {
                 field.addDropdownValue(option.attr("value"), option.text());

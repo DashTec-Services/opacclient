@@ -1,8 +1,5 @@
 package de.geeksfactory.opacclient.apis;
 
-import org.apache.http.NameValuePair;
-import org.apache.http.client.entity.UrlEncodedFormEntity;
-import org.apache.http.message.BasicNameValuePair;
 import org.joda.time.LocalDate;
 import org.joda.time.format.DateTimeFormat;
 import org.json.JSONArray;
@@ -15,17 +12,20 @@ import org.jsoup.nodes.FormElement;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import de.geeksfactory.opacclient.i18n.StringProvider;
 import de.geeksfactory.opacclient.networking.HttpClientFactory;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.LentItem;
 import de.geeksfactory.opacclient.objects.Library;
 import de.geeksfactory.opacclient.objects.ReservedItem;
+import okhttp3.FormBody;
 
 /**
  * API for the PICA OPAC by OCLC combined with LBS account functions Tested with LBS 4 in TU
@@ -36,32 +36,40 @@ import de.geeksfactory.opacclient.objects.ReservedItem;
 public class PicaLBS extends Pica {
     private String lbsUrl;
 
-    public void init(Library lib, HttpClientFactory httpClientFactory) {
-        super.init(lib, httpClientFactory);
+    @Override
+    public void init(Library lib, HttpClientFactory httpClientFactory, boolean debug) {
+        super.init(lib, httpClientFactory, debug);
         this.lbsUrl = data.optString("lbs_url", this.opac_url);
     }
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account account,
+    public ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException {
         try {
             JSONArray json = new JSONArray(item.getReservation_info());
-            if (json.length() != 1) {
-                // TODO: This case is not implemented, don't know if it is possible with LBS
-                ReservationResult res = new ReservationResult(MultiStepResult.Status.ERROR);
-                res.setMessage(stringProvider.getString(StringProvider.INTERNAL_ERROR));
+            if (json.length() != 1 && selection == null) {
+
+                ReservationResult res = new ReservationResult(MultiStepResult.Status.SELECTION_NEEDED);
+                res.setActionIdentifier(ReservationResult.ACTION_BRANCH);
+                List<Map<String, String>> selections = new ArrayList<>();
+                for (int i = 0; i < json.length(); i++) {
+                    Map<String, String> selopt = new HashMap<>();
+                    selopt.put("key", String.valueOf(i));
+                    selopt.put("value", json.getJSONObject(i).getString("desc") + " (" + json.getJSONObject(i).getString("status") + ")");
+                    selections.add(selopt);
+                }
+                res.setSelection(selections);
                 return res;
             } else {
-                String url = json.getJSONObject(0).getString("link");
+                String url = json.getJSONObject(selection == null ? 0 : Integer.parseInt(selection)).getString("link");
                 Document doc = Jsoup.parse(httpGet(url, getDefaultLBSEncoding()));
 
                 if (doc.select("#opacVolumesForm").size() == 0) {
-                    List<NameValuePair> params = new ArrayList<>();
-                    params.add(new BasicNameValuePair("j_username", account.getName()));
-                    params.add(new BasicNameValuePair("j_password", account.getPassword()));
-                    params.add(new BasicNameValuePair("login", "Login"));
-                    doc = Jsoup.parse(httpPost(url,
-                            new UrlEncodedFormEntity(params), getDefaultLBSEncoding()));
+                    FormBody body = new FormBody.Builder()
+                            .add("j_username", account.getName())
+                            .add("j_password", account.getPassword())
+                            .add("login", "Login").build();
+                    doc = Jsoup.parse(httpPost(url, body, getDefaultLBSEncoding()));
                 }
 
                 if (doc.select(".error, font[color=red]").size() > 0) {
@@ -69,22 +77,25 @@ public class PicaLBS extends Pica {
                     res.setMessage(doc.select(".error, font[color=red]").text());
                     return res;
                 }
-                System.out.println(doc.text());
                 List<Connection.KeyVal> keyVals =
                         ((FormElement) doc.select("#opacVolumesForm").first()).formData();
-                List<NameValuePair> params = new ArrayList<>();
+                FormBody.Builder params = new FormBody.Builder();
                 for (Connection.KeyVal kv : keyVals) {
-                    params.add(new BasicNameValuePair(kv.key(), kv.value()));
+                    params.add(kv.key(), kv.value());
                 }
-                doc = Jsoup.parse(
-                        httpPost(url, new UrlEncodedFormEntity(params), getDefaultEncoding()));
+                doc = Jsoup.parse(httpPost(url, params.build(), getDefaultEncoding()));
                 if (doc.select(".error").size() > 0) {
                     ReservationResult res = new ReservationResult(MultiStepResult.Status.ERROR);
                     res.setMessage(doc.select(".error").text());
                     return res;
-                } else if (doc.select(".info").text().contains("Reservation saved")
-                        || doc.select(".info").text().contains("vorgemerkt")) {
+                } else if (doc.select(".info, .alertmessage").text().contains("Reservation saved")
+                        || doc.select(".info, .alertmessage").text().contains("vorgemerkt")
+                        || doc.select(".info, .alertmessage").text().contains("erfolgt")) {
                     return new ReservationResult(MultiStepResult.Status.OK);
+                } else if (doc.select(".alertmessage").size() > 0) {
+                    ReservationResult res = new ReservationResult(MultiStepResult.Status.ERROR);
+                    res.setMessage(doc.select(".alertmessage").text());
+                    return res;
                 } else {
                     ReservationResult res = new ReservationResult(MultiStepResult.Status.ERROR);
                     res.setMessage(stringProvider.getString(StringProvider.UNKNOWN_ERROR));
@@ -102,14 +113,13 @@ public class PicaLBS extends Pica {
     @Override
     public ProlongResult prolong(String media, Account account, int useraction,
             String selection) throws IOException {
-        List<NameValuePair> params = new ArrayList<>();
+        FormBody body = new FormBody.Builder()
+                .add("renew", "Renew")
+                .add("_volumeNumbersToRenew", "")
+                .add("volumeNumbersToRenew", media).build();
 
-        params.add(new BasicNameValuePair("renew", "Renew"));
-        params.add(new BasicNameValuePair("_volumeNumbersToRenew", ""));
-        params.add(new BasicNameValuePair("volumeNumbersToRenew", media));
-
-        String html = httpPost(lbsUrl + "/LBS_WEB/borrower/loans.htm",
-                new UrlEncodedFormEntity(params), getDefaultLBSEncoding());
+        String html = httpPost(lbsUrl + "/LBS_WEB/borrower/loans.htm", body,
+                getDefaultLBSEncoding());
         Document doc = Jsoup.parse(html);
         String message = doc.select(".alertmessage").text();
         if (message.contains("wurde verlängert") || message.contains("has been renewed")) {
@@ -126,16 +136,21 @@ public class PicaLBS extends Pica {
     }
 
     @Override
+    public ProlongAllResult prolongMultiple(List<String> media,
+            Account account, int useraction, String selection) throws IOException {
+        return null;
+    }
+
+    @Override
     public CancelResult cancel(String media, Account account, int useraction,
             String selection) throws IOException, OpacErrorException {
-        List<NameValuePair> params = new ArrayList<>();
+        FormBody body = new FormBody.Builder()
+                .add("cancel", "Cancel reservation")
+                .add("_volumeReservationsToCancel", "")
+                .add("volumeReservationsToCancel", media).build();
 
-        params.add(new BasicNameValuePair("cancel", "Cancel reservation"));
-        params.add(new BasicNameValuePair("_volumeReservationsToCancel", ""));
-        params.add(new BasicNameValuePair("volumeReservationsToCancel", media));
-
-        String html = httpPost(lbsUrl + "/LBS_WEB/borrower/reservations.htm",
-                new UrlEncodedFormEntity(params), getDefaultLBSEncoding());
+        String html = httpPost(lbsUrl + "/LBS_WEB/borrower/reservations.htm", body,
+                getDefaultLBSEncoding());
         Document doc = Jsoup.parse(html);
         String message = doc.select(".alertmessage").text();
         if (message.contains("ist storniert") || message.contains("has been cancelled")) {
@@ -186,8 +201,11 @@ public class PicaLBS extends Pica {
             item.setTitle(titleAndAuthor[0]);
             if (titleAndAuthor[1] != null)  item.setAuthor(titleAndAuthor[1]);
             String returndate =
-                    extractAccountInfo(tr, "Returndate", "ausgeliehen bis", "Ausleihfrist");
-            item.setDeadline(parseDate(returndate));
+                    extractAccountInfo(tr, "Returndate", "ausgeliehen bis",
+                            "Ausleihfrist", "Leihfristende");
+            if (returndate != null) {
+                item.setDeadline(parseDate(returndate));
+            }
 
             StringBuilder status = new StringBuilder();
 
@@ -248,7 +266,7 @@ public class PicaLBS extends Pica {
 
     private static LocalDate parseDate(String date) {
         try {
-            if (date.matches("\\d\\d.\\d\\d.\\d\\d\\d\\d")) {
+            if (date.matches("\\d\\d\\.\\d\\d\\.\\d\\d\\d\\d")) {
                 return DateTimeFormat.forPattern("dd.MM.yyyy").withLocale(Locale.GERMAN)
                         .parseLocalDate(date);
             } else if (date.matches("\\d\\d/\\d\\d/\\d\\d\\d\\d")) {
@@ -281,8 +299,14 @@ public class PicaLBS extends Pica {
             String numberOfReservations =
                     extractAccountInfo(tr, "Vormerkung", "Number of reservations");
             if (numberOfReservations != null) {
-                status.append(stringProvider.getFormattedString(
-                        StringProvider.RESERVATIONS_NUMBER, numberOfReservations));
+                try {
+                    status.append(stringProvider.getQuantityString(
+                            StringProvider.RESERVATIONS_NUMBER,
+                            Integer.parseInt(numberOfReservations.trim()),
+                            Integer.parseInt(numberOfReservations.trim())));
+                } catch (NumberFormatException e) {
+                    status.append(numberOfReservations);
+                }
             }
 
             String reservationDate = extractAccountInfo(tr, "Reservationdate", "Vormerkungsdatum");
@@ -336,16 +360,19 @@ public class PicaLBS extends Pica {
         // check if already logged in
         String html = httpGet(lbsUrl + "/LBS_WEB/borrower/borrower.htm",
                 getDefaultLBSEncoding(), true);
-        if (!html.contains("Login") && !html.equals("")) return;
+        if (!html.contains("class=\"error\"") && !html.contains("Login") && !html.equals("") && !html.contains("Systemfehler") &&
+                !html.contains("nicht aktiv gewesen")) {
+            return;
+        }
 
         // Get JSESSIONID cookie
-        httpGet(lbsUrl + "/LBS_WEB/borrower/borrower.htm?USR=1000&BES=1&LAN=" + getLang(),
+        httpGet(lbsUrl + "/LBS_WEB/borrower/borrower.htm?USR=1000&BES=" + db + "&LAN=" + getLang(),
                 getDefaultLBSEncoding());
-        List<NameValuePair> data = new ArrayList<>();
-        data.add(new BasicNameValuePair("j_username", account.getName()));
-        data.add(new BasicNameValuePair("j_password", account.getPassword()));
+        FormBody body = new FormBody.Builder()
+                .add("j_username", account.getName())
+                .add("j_password", account.getPassword()).build();
         Document doc = Jsoup.parse(httpPost(lbsUrl + "/LBS_WEB/j_spring_security_check",
-                new UrlEncodedFormEntity(data), getDefaultLBSEncoding()));
+                body, getDefaultLBSEncoding()));
 
         if (doc.select("font[color=red]").size() > 0) {
             throw new OpacErrorException(doc.select("font[color=red]").text());

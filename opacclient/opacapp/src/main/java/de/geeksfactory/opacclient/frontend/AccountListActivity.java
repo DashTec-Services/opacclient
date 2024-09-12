@@ -23,12 +23,6 @@ package de.geeksfactory.opacclient.frontend;
 
 import android.content.Intent;
 import android.os.Bundle;
-import android.support.design.widget.FloatingActionButton;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.app.ActivityOptionsCompat;
-import android.support.v4.view.ViewCompat;
-import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
 import android.util.DisplayMetrics;
 import android.view.MenuItem;
 import android.view.View;
@@ -38,8 +32,15 @@ import android.widget.AdapterView.OnItemLongClickListener;
 import android.widget.ListView;
 import android.widget.RelativeLayout;
 
+import com.google.android.material.floatingactionbutton.FloatingActionButton;
+
 import java.util.List;
 
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.app.ActivityCompat;
+import androidx.core.app.ActivityOptionsCompat;
+import androidx.core.view.ViewCompat;
 import de.geeksfactory.opacclient.OpacClient;
 import de.geeksfactory.opacclient.R;
 import de.geeksfactory.opacclient.objects.Account;
@@ -97,9 +98,7 @@ public class AccountListActivity extends AppCompatActivity {
     public void refreshLv() {
         ListView lvAccounts = (ListView) findViewById(R.id.lvAccounts);
         AccountDataSource data = new AccountDataSource(this);
-        data.open();
         accounts = data.getAllAccounts();
-        data.close();
         AccountListAdapter adapter = new AccountListAdapter(this, accounts);
         lvAccounts.setAdapter(adapter);
     }
@@ -117,7 +116,8 @@ public class AccountListActivity extends AppCompatActivity {
                                     int position, long id) {
                 Intent i = new Intent(AccountListActivity.this,
                         AccountEditActivity.class);
-                i.putExtra("id", accounts.get(position).getId());
+                i.putExtra(AccountEditActivity.EXTRA_ACCOUNT_ID, accounts.get(position).getId());
+                i.putExtra(AccountEditActivity.EXTRA_EDITING, true);
                 ActivityOptionsCompat options = ActivityOptionsCompat.makeScaleUpAnimation(view,
                         view.getLeft(), view.getTop(), view.getWidth(), view.getHeight());
                 ActivityCompat.startActivityForResult(AccountListActivity.this, i,
@@ -151,6 +151,8 @@ public class AccountListActivity extends AppCompatActivity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == ACCOUNT_EDIT_REQUEST_CODE) {
             refreshLv();
+        } else {
+            super.onActivityResult(requestCode, resultCode, data);
         }
     }
 

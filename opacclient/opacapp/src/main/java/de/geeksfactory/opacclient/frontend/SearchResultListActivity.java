@@ -5,9 +5,6 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.os.AsyncTask;
 import android.os.Bundle;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.app.ActivityOptionsCompat;
-import android.support.v4.util.Pair;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
@@ -15,6 +12,10 @@ import android.view.View;
 
 import java.io.IOException;
 
+import androidx.core.app.ActivityCompat;
+import androidx.core.app.ActivityOptionsCompat;
+import androidx.core.util.Pair;
+import de.geeksfactory.opacclient.OpacClient;
 import de.geeksfactory.opacclient.R;
 import de.geeksfactory.opacclient.apis.OpacApi;
 import de.geeksfactory.opacclient.apis.OpacApi.OpacErrorException;
@@ -125,11 +126,19 @@ public class SearchResultListActivity extends OpacActivity implements
     public void onItemSelected(SearchResult result, View coverView, int touchX, int touchY) {
         if (result.getChildQuery() != null) {
             app.startSearch(this, result.getChildQuery());
-        } else if ((app.getApi().getSupportFlags() & OpacApi.SUPPORT_FLAG_ENDLESS_SCROLLING) == 0
-                && result.getPage() != listFragment.getLastLoadedPage()) {
-            new ReloadOldPageTask(result, coverView).execute();
         } else {
-            showDetail(result, coverView, touchX, touchY);
+            OpacApi api;
+            try {
+                api = app.getApi();
+            } catch (OpacClient.LibraryRemovedException e) {
+                return;
+            }
+            if ((api.getSupportFlags() & OpacApi.SUPPORT_FLAG_ENDLESS_SCROLLING) == 0
+                    && result.getPage() != listFragment.getLastLoadedPage()) {
+                new ReloadOldPageTask(result, coverView).execute();
+            } else {
+                showDetail(result, coverView, touchX, touchY);
+            }
         }
     }
 
@@ -155,6 +164,11 @@ public class SearchResultListActivity extends OpacActivity implements
             if (res.getId() != null) {
                 arguments.putString(SearchResultDetailFragment.ARG_ITEM_ID, res.getId());
             }
+            if (res.getLibraryIdent() != null) {
+                arguments.putString(SearchResultDetailFragment.ARG_ITEM_LIBRARY_IDENT, res.getLibraryIdent());
+            } else {
+                arguments.putString(SearchResultDetailFragment.ARG_ITEM_LIBRARY_IDENT, app.getLibrary().getIdent());
+            }
             if (res.getCoverBitmap() != null) {
                 arguments.putParcelable(SearchResultDetailFragment.ARG_ITEM_COVER_BITMAP,
                         smallCover);
@@ -176,9 +190,14 @@ public class SearchResultListActivity extends OpacActivity implements
             Intent detailIntent = new Intent(this,
                     SearchResultDetailActivity.class);
             detailIntent.putExtra(SearchResultDetailFragment.ARG_ITEM_NR, res.getNr());
+            detailIntent.putExtra(SearchResultDetailFragment.ARG_IS_META_SEARCH, isMetaSearch());
             if (res.getId() != null) {
                 detailIntent.putExtra(SearchResultDetailFragment.ARG_ITEM_ID,
                         res.getId());
+            }
+            if (res.getLibraryIdent() != null) {
+                detailIntent.putExtra(SearchResultDetailFragment.ARG_ITEM_LIBRARY_IDENT,
+                        res.getLibraryIdent());
             }
             if (res.getType() != null) {
                 detailIntent.putExtra(SearchResultDetailFragment.ARG_ITEM_MEDIATYPE,
@@ -215,6 +234,10 @@ public class SearchResultListActivity extends OpacActivity implements
     @Override
     public boolean isTwoPane() {
         return twoPane;
+    }
+
+    protected boolean isMetaSearch() {
+        return getIntent().getBooleanExtra(SearchResultDetailFragment.ARG_IS_META_SEARCH, false);
     }
 
     public class ReloadOldPageTask extends AsyncTask<Void, Void, SearchRequestResult> {

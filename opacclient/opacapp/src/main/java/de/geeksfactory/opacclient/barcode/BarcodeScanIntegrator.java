@@ -22,7 +22,6 @@
 package de.geeksfactory.opacclient.barcode;
 
 import android.app.Activity;
-import android.support.v7.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -36,6 +35,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
+import androidx.appcompat.app.AlertDialog;
 import de.geeksfactory.opacclient.R;
 import de.geeksfactory.opacclient.utils.CompatibilityUtils;
 
@@ -102,6 +102,13 @@ public class BarcodeScanIntegrator {
         } catch (NameNotFoundException e) {
         }
         try {
+            pm.getPackageInfo("de.t_dankworth.secscanqr", 0);
+            initiate_scan_zxing();
+            return;
+        } catch (NameNotFoundException e) {
+        }
+
+        try {
             pm.getPackageInfo("la.droid.qr", 0);
             initiate_scan_qrdroid();
             return;
@@ -125,7 +132,7 @@ public class BarcodeScanIntegrator {
                     @Override
                     public void onClick(DialogInterface dialogInterface, int i) {
                         Uri uri = Uri
-                                .parse("market://details?id=com.google.zxing.client.android");
+                                .parse("market://details?id=com.srowen.bs.android");
                         Intent intent = new Intent(Intent.ACTION_VIEW, uri);
                         try {
                             ctx.startActivity(intent);
@@ -156,14 +163,14 @@ public class BarcodeScanIntegrator {
     }
 
     public void initiate_scan_zxing() {
-        final Collection<String> desiredBarcodeFormats = list("UPC_A", "UPC_E",
-                "EAN_8", "EAN_13", "CODE_39", "CODE_93", "CODE_128");
+        /*final Collection<String> desiredBarcodeFormats = list("UPC_A", "UPC_E",
+                "EAN_8", "EAN_13", "CODE_39", "CODE_93", "CODE_128");*/
 
         Intent intentScan = new Intent("com.google.zxing.client.android.SCAN");
         intentScan.addCategory(Intent.CATEGORY_DEFAULT);
 
         // check which types of codes to scan for
-        if (desiredBarcodeFormats != null) {
+        /*if (desiredBarcodeFormats != null) {
             // set the desired barcode types
             StringBuilder joinedByComma = new StringBuilder();
             for (String format : desiredBarcodeFormats) {
@@ -173,7 +180,7 @@ public class BarcodeScanIntegrator {
                 joinedByComma.append(format);
             }
             intentScan.putExtra("SCAN_FORMATS", joinedByComma.toString());
-        }
+        }*/
 
         String targetAppPackage = findTargetAppPackage(intentScan);
         if (targetAppPackage == null) {
@@ -189,7 +196,7 @@ public class BarcodeScanIntegrator {
     private String findTargetAppPackage(Intent intent) {
         final Collection<String> targetApplications = list(
                 "com.google.zxing.client.android", "com.srowen.bs.android",
-                "com.srowen.bs.android.simple");
+                "com.srowen.bs.android.simple", "de.t_dankworth.secscanqr");
         PackageManager pm = ctx.getPackageManager();
         List<ResolveInfo> availableApps = pm.queryIntentActivities(intent,
                 PackageManager.MATCH_DEFAULT_ONLY);

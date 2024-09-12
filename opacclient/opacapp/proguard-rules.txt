@@ -25,11 +25,32 @@
 -dontwarn android.support.v4.app.NotificationCompat$*
 -dontwarn android.support.v4.app.NotificationCompatGingerbread
 
-# ACRA specifics, See also: https://github.com/ACRA/acra/wiki/ProGuard
--keepattributes SourceFile,LineNumberTable
--keepattributes *Annotation*
--keep class org.acra.** { *; }
+# sentry, see https://github.com/getsentry/sentry-java/issues/353
+-keepattributes LineNumberTable,SourceFile
+-dontwarn org.slf4j.**
+-dontwarn javax.**
 
 # Joda Time
 -dontwarn com.google.**
 -keep class com.google.** { *; }
+
+# OkHttp3
+-keep class okio.** { *; }
+-keep interface okio.* { *; }
+-dontwarn okio.*
+-keep class okhttp3.** { *; }
+-keep interface okhttp3.* { *; }
+-dontwarn okhttp3.*
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-dontwarn javax.annotation.**
+
+-dontwarn retrofit2.Platform$Java8
+
+# Apache
+#-dontwarn org.apache.**
+
+# streamsupport
+# https://github.com/streamsupport/streamsupport/blob/master/streamsupport-pro/streamsupport.pro
+-keep class java8.** { *; }
+-dontwarn java8.**

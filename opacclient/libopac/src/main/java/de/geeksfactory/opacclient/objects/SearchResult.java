@@ -2,26 +2,27 @@
  * Copyright (C) 2013 by Raphael Michel under the MIT license:
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), 
- * to deal in the Software without restriction, including without limitation 
- * the rights to use, copy, modify, merge, publish, distribute, sublicense, 
- * and/or sell copies of the Software, and to permit persons to whom the Software 
+ * of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the Software
  * is furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in 
+ * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
- * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, 
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+ * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
 package de.geeksfactory.opacclient.objects;
 
 import java.util.List;
+import java8.util.concurrent.CompletableFuture;
 
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 
@@ -38,8 +39,10 @@ public class SearchResult implements CoverHolder {
     private Status status;
     private byte[] coverBitmap;
     private String cover;
+    private CompletableFuture<Void> coverFuture = null;
     private int page;
     private List<SearchQuery> childQuery;
+    private String libraryIdent;
 
     /**
      * Create a new SearchResult object
@@ -217,6 +220,29 @@ public class SearchResult implements CoverHolder {
         this.childQuery = childQuery;
     }
 
+    /**
+     * Sets the libraryIdent of the library this search result belongs to.
+     */
+    public void setLibraryIdent(String libraryIdent) {
+        this.libraryIdent = libraryIdent;
+    }
+
+    /**
+     * Gets the libraryIdent of the library this search result belongs to if set.
+     * Returns null if libraryIdent is not set
+     */
+    public String getLibraryIdent() {
+        return libraryIdent;
+    }
+
+    public CompletableFuture<Void> getCoverFuture() {
+        return coverFuture;
+    }
+
+    public void setCoverFuture(CompletableFuture<Void> coverFuture) {
+        this.coverFuture = coverFuture;
+    }
+
     @Override
     public String toString() {
         return "SearchResult [id= " + id + ", type=" + type + ", nr=" + nr
@@ -233,7 +259,8 @@ public class SearchResult implements CoverHolder {
         GAME_CONSOLE, EBOOK, SCORE_MUSIC, PACKAGE_BOOKS, UNKNOWN, NEWSPAPER,
         BOARDGAME, SCHOOL_VERSION, MAP, BLURAY, AUDIO_CASSETTE, ART, MAGAZINE,
         GAME_CONSOLE_WII, GAME_CONSOLE_NINTENDO, GAME_CONSOLE_PLAYSTATION,
-        GAME_CONSOLE_XBOX, LP_RECORD, MP3, URL, EVIDEO, EDOC, EAUDIO
+        GAME_CONSOLE_XBOX, LP_RECORD, MP3, URL, EVIDEO, EDOC, EAUDIO, DEVICE,
+        MICROFORM, FIGURINE
     }
 
     /**

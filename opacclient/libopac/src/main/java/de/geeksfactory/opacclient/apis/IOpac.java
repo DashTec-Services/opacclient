@@ -2,29 +2,25 @@
  * Copyright (C) 2013 by Johan von Forstner under the MIT license:
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), 
- * to deal in the Software without restriction, including without limitation 
- * the rights to use, copy, modify, merge, publish, distribute, sublicense, 
- * and/or sell copies of the Software, and to permit persons to whom the Software 
+ * of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the Software
  * is furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in 
+ * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
- * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, 
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+ * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
 package de.geeksfactory.opacclient.apis;
 
-import org.apache.http.NameValuePair;
-import org.apache.http.client.entity.UrlEncodedFormEntity;
-import org.apache.http.client.utils.URLEncodedUtils;
-import org.apache.http.message.BasicNameValuePair;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 import org.json.JSONException;
@@ -37,6 +33,7 @@ import org.jsoup.select.Elements;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
+import java.nio.charset.Charset;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -55,7 +52,7 @@ import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.AccountData;
 import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
 import de.geeksfactory.opacclient.objects.Filter;
 import de.geeksfactory.opacclient.objects.Filter.Option;
 import de.geeksfactory.opacclient.objects.LentItem;
@@ -69,6 +66,8 @@ import de.geeksfactory.opacclient.searchfields.DropdownSearchField;
 import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 import de.geeksfactory.opacclient.searchfields.TextSearchField;
+import okhttp3.FormBody;
+import okhttp3.HttpUrl;
 
 /**
  * Implementation of Fleischmann iOpac, including account support Seems to work in all the libraries
@@ -77,7 +76,7 @@ import de.geeksfactory.opacclient.searchfields.TextSearchField;
  * @author Johan von Forstner, 17.09.2013
  */
 
-public class IOpac extends BaseApi implements OpacApi {
+public class IOpac extends OkHttpBaseApi implements OpacApi {
 
     protected static HashMap<String, MediaType> defaulttypes = new HashMap<>();
 
@@ -111,12 +110,14 @@ public class IOpac extends BaseApi implements OpacApi {
     protected int results_total;
 
     protected boolean newShareLinks;
+    private Charset iso88591;
 
     @Override
-    public void init(Library lib, HttpClientFactory httpClientFactory) {
-        super.init(lib, httpClientFactory);
+    public void init(Library lib, HttpClientFactory httpClientFactory, boolean debug) {
+        super.init(lib, httpClientFactory, debug);
 
         this.data = lib.getData();
+        iso88591 = Charset.forName("ISO-8859-1");
 
         try {
             this.opac_url = data.getString("baseurl");
@@ -128,13 +129,13 @@ public class IOpac extends BaseApi implements OpacApi {
         }
     }
 
-    protected int addParameters(SearchQuery query, List<NameValuePair> params,
+    protected int addParameters(SearchQuery query, FormBody.Builder params,
             int index) {
         if (query.getValue().equals("")) {
             return index;
         }
 
-        params.add(new BasicNameValuePair(query.getKey(), query.getValue()));
+        params.add(query.getKey(), query.getValue());
         return index + 1;
 
     }
@@ -146,7 +147,7 @@ public class IOpac extends BaseApi implements OpacApi {
             start();
         }
 
-        List<NameValuePair> params = new ArrayList<>();
+        FormBody.Builder params = new FormBody.Builder(iso88591);
 
         int index = 0;
         start();
@@ -155,8 +156,8 @@ public class IOpac extends BaseApi implements OpacApi {
             index = addParameters(query, params, index);
         }
 
-        params.add(new BasicNameValuePair("Anzahl", "10"));
-        params.add(new BasicNameValuePair("pshStart", "Suchen"));
+        params.add("Anzahl", "10");
+        params.add("pshStart", "Suchen");
 
         if (index == 0) {
             throw new OpacErrorException(
@@ -164,7 +165,7 @@ public class IOpac extends BaseApi implements OpacApi {
         }
 
         String html = httpPost(opac_url + "/cgi-bin/di.exe",
-                new UrlEncodedFormEntity(params, "iso-8859-1"),
+                params.build(),
                 getDefaultEncoding());
 
         return parse_search(html, 1);
@@ -293,7 +294,7 @@ public class IOpac extends BaseApi implements OpacApi {
             String additionalInfo = "";
             if (colmap.get("info") != null) {
                 Element info = tr.select("td").get(colmap.get("info"));
-                title = info.select("a[title=Details-Info]").text().trim();
+                title = info.select("a[title=Details-Info], a[title=Details-Info1]").text().trim();
                 String authorIn = info.text().substring(0,
                         info.text().indexOf(title));
                 if (authorIn.contains(":")) {
@@ -408,7 +409,7 @@ public class IOpac extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResultById(String id, String homebranch)
+    public DetailedItem getResultById(String id, String homebranch)
             throws IOException {
 
         if (!initialised) {
@@ -426,7 +427,7 @@ public class IOpac extends BaseApi implements OpacApi {
     }
 
     @Override
-    public DetailledItem getResult(int position) throws IOException {
+    public DetailedItem getResult(int position) throws IOException {
         if (!initialised) {
             start();
         }
@@ -439,10 +440,10 @@ public class IOpac extends BaseApi implements OpacApi {
         return parse_result(html);
     }
 
-    protected DetailledItem parse_result(String html) throws IOException {
+    protected DetailedItem parse_result(String html) throws IOException {
         Document doc = Jsoup.parse(html);
 
-        DetailledItem result = new DetailledItem();
+        DetailedItem result = new DetailedItem();
 
         String id = null;
         if (doc.select("input[name=mednr]").size() > 0) {
@@ -470,11 +471,24 @@ public class IOpac extends BaseApi implements OpacApi {
         // GET INFORMATION
         Copy copy = new Copy();
 
-        for (Element element : table) {
-            String detail = element.select("td").text().trim()
-                                   .replace("\u00a0", "");
-            String title = element.select("th").text().trim()
-                                  .replace("\u00a0", "");
+        for (Element row : table) {
+            Element titleElem;
+            Element detailElem;
+            if (row.select("> th").size() > 0) {
+                // iOpac < 2.87
+                titleElem = row.select("th").first();
+                detailElem = row.select("td").first();
+            } else if (row.select("> td").size() >= 2) {
+                // iOpac >= 2.87
+                titleElem = row.select("> td").first();
+                detailElem = row.select("> td").get(1);
+            } else {
+                // we don't know what to do
+                continue;
+            }
+
+            String detail = detailElem.text().trim().replace("\u00a0", "");
+            String title = titleElem.text().trim().replace("\u00a0", "");
 
             if (!title.equals("")) {
 
@@ -534,7 +548,7 @@ public class IOpac extends BaseApi implements OpacApi {
     }
 
     @Override
-    public ReservationResult reservation(DetailledItem item, Account account,
+    public ReservationResult reservation(DetailedItem item, Account account,
             int useraction, String selection) throws IOException {
         String reservation_info = item.getReservation_info();
         // STEP 1: Login page
@@ -551,18 +565,17 @@ public class IOpac extends BaseApi implements OpacApi {
         }
 
         Element form = doc.select("form[name=form1]").first();
-        List<BasicNameValuePair> params = new ArrayList<>();
-        params.add(new BasicNameValuePair("sleKndNr", account.getName()));
-        params.add(new BasicNameValuePair("slePw", account.getPassword()));
-        params.add(new BasicNameValuePair("pshLogin", "Reservieren"));
+        FormBody.Builder params = new FormBody.Builder(iso88591);
+        params.add("sleKndNr", account.getName());
+        params.add("slePw", account.getPassword());
+        params.add("pshLogin", "Reservieren");
         for (Element input : form.select("input[type=hidden]")) {
-            params.add(new BasicNameValuePair(input.attr("name"), input
-                    .attr("value")));
+            params.add(input.attr("name"), input
+                    .attr("value"));
         }
 
         // STEP 2: Confirmation page
-        html = httpPost(opac_url + "/cgi-bin/di.exe", new UrlEncodedFormEntity(
-                params), getDefaultEncoding());
+        html = httpPost(opac_url + "/cgi-bin/di.exe", params.build(), getDefaultEncoding());
         doc = Jsoup.parse(html);
 
         if (doc.select("form[name=form1]").size() > 0) {
@@ -634,14 +647,12 @@ public class IOpac extends BaseApi implements OpacApi {
         Document doc = getAccountPage(account);
         // Check if the iOPAC verion supports this feature
         if (doc.select("button.verlallbutton").size() > 0) {
-            List<NameValuePair> params = new ArrayList<>();
-            params.add(new BasicNameValuePair("mode", "42"));
+            HttpUrl.Builder url = HttpUrl.parse(opac_url + "/cgi-bin/di.exe").newBuilder();
+            url.addQueryParameter("mode", "42");
             for (Element checkbox : doc.select("input.VerlAllCheckboxOK")) {
-                params.add(new BasicNameValuePair("MedNrVerlAll", checkbox.val()));
+                url.addQueryParameter("MedNrVerlAll", checkbox.val());
             }
-            String html = httpGet(
-                    opac_url + "/cgi-bin/di.exe?" + URLEncodedUtils.format(params, "UTF-8"),
-                    getDefaultEncoding());
+            String html = httpGet(url.build().toString(), getDefaultEncoding());
             Document doc2 = Jsoup.parse(html);
             Pattern pattern = Pattern.compile("(\\d+ Medi(?:en|um) wurden? verl.ngert)\\s*(\\d+ " +
                     "Medi(?:en|um) wurden? nicht verl.ngert)?");
@@ -668,6 +679,12 @@ public class IOpac extends BaseApi implements OpacApi {
             return new ProlongAllResult(MultiStepResult.Status.ERROR,
                     stringProvider.getString(StringProvider.UNSUPPORTED_IN_LIBRARY));
         }
+    }
+
+    @Override
+    public ProlongAllResult prolongMultiple(List<String> media,
+            Account account, int useraction, String selection) throws IOException {
+        return null;
     }
 
     @Override
@@ -722,6 +739,9 @@ public class IOpac extends BaseApi implements OpacApi {
             Matcher matcher = regex.matcher(h4.text());
             if (matcher.find()) res.setValidUntil(matcher.group(1));
         }
+        if (doc.select(".ReaderAccount_expiredID").size() > 0) {
+            res.setWarning(doc.select(".ReaderAccount_expiredID").text());
+        }
 
         if (media.isEmpty() && reserved.isEmpty()) {
             if (doc.select("h1").size() > 0) {
@@ -751,13 +771,12 @@ public class IOpac extends BaseApi implements OpacApi {
     }
 
     private Document getAccountPage(Account account) throws IOException {
-        List<NameValuePair> params = new ArrayList<>();
-        params.add(new BasicNameValuePair("sleKndNr", account.getName()));
-        params.add(new BasicNameValuePair("slePw", account.getPassword()));
-        params.add(new BasicNameValuePair("pshLogin", "Login"));
+        FormBody.Builder params = new FormBody.Builder(iso88591);
+        params.add("sleKndNr", account.getName());
+        params.add("slePw", account.getPassword());
+        params.add("pshLogin", "Login");
 
-        String html = httpPost(opac_url + "/cgi-bin/di.exe",
-                new UrlEncodedFormEntity(params, "iso-8859-1"),
+        String html = httpPost(opac_url + "/cgi-bin/di.exe", params.build(),
                 getDefaultEncoding());
         return Jsoup.parse(html);
     }
@@ -773,7 +792,7 @@ public class IOpac extends BaseApi implements OpacApi {
     static void parseMediaList(List<LentItem> media, Document doc, JSONObject data) {
         if (doc.select("a[name=AUS]").size() == 0) return;
 
-        Elements copytrs = doc.select("a[name=AUS] ~ table, a[name=AUS] ~ form table").first()
+        Elements copytrs = doc.select("a[name=AUS] ~ table, a[name=AUS] ~ form table, a[name=AUS] ~ div form table, #ReaderAccount_LoanInfo_Wrapper form table").first()
                               .select("tr");
         doc.setBaseUri(data.optString("baseurl"));
 
@@ -794,6 +813,7 @@ public class IOpac extends BaseApi implements OpacApi {
         }
 
         Pattern datePattern = Pattern.compile("\\d{2}\\.\\d{2}\\.\\d{4}");
+        Pattern reservedPattern = Pattern.compile("\\d+ x reserv.");
         for (int i = 1; i < trs; i++) {
             Element tr = copytrs.get(i);
             LentItem item = new LentItem();
@@ -820,8 +840,8 @@ public class IOpac extends BaseApi implements OpacApi {
             if (data.optInt("maxprolongcount", -1) != -1) {
                 item.setRenewable(prolongCount < data.optInt("maxprolongcount", -1));
             }
-            if (copymap.optInt("deadline", 4) >= 0) {
-                String value = tr.child(copymap.optInt("deadline", 4)).text().trim()
+            if (copymap.optInt("returndate", 4) >= 0) {
+                String value = tr.child(copymap.optInt("returndate", 4)).text().trim()
                                  .replace("\u00a0", "");
                 Matcher matcher = datePattern.matcher(value);
                 if (matcher.find()) {
@@ -829,6 +849,14 @@ public class IOpac extends BaseApi implements OpacApi {
                         item.setDeadline(fmt.parseLocalDate(matcher.group()));
                     } catch (IllegalArgumentException e1) {
                         e1.printStackTrace();
+                    }
+                }
+                matcher = reservedPattern.matcher(value);
+                if (matcher.find()) {
+                    if (item.getStatus() != null) {
+                        item.setStatus(item.getStatus() + ", " + matcher.group());
+                    } else {
+                        item.setStatus(matcher.group());
                     }
                 }
             }
@@ -864,7 +892,7 @@ public class IOpac extends BaseApi implements OpacApi {
 
     static void parseResList(List<ReservedItem> media, Document doc, JSONObject data) {
         if (doc.select("a[name=RES]").size() == 0) return;
-        Elements copytrs = doc.select("a[name=RES] ~ table:contains(Titel)").first().select("tr");
+        Elements copytrs = doc.select("a[name=RES] ~ table:contains(Titel), a[name=RES] ~ div table:contains(Titel)").first().select("tr");
         doc.setBaseUri(data.optString("baseurl"));
         DateTimeFormatter fmt = DateTimeFormat.forPattern("dd.MM.yyyy").withLocale(Locale.GERMAN);
 
@@ -879,11 +907,16 @@ public class IOpac extends BaseApi implements OpacApi {
 
             item.setTitle(tr.child(0).text().trim().replace("\u00a0", ""));
             item.setAuthor(tr.child(1).text().trim().replace("\u00a0", ""));
-            try {
-                item.setReadyDate(
-                        fmt.parseLocalDate(tr.child(4).text().trim().replace("\u00a0", "")));
-            } catch (IllegalArgumentException e) {
-                item.setStatus(tr.child(4).text().trim().replace("\u00a0", ""));
+            String readyDate = tr.child(4).text().trim().replace("\u00a0", "");
+            if (readyDate.equals("")) {
+                item.setStatus("bereit");
+            } else {
+                try {
+                    item.setReadyDate(
+                            fmt.parseLocalDate(readyDate));
+                } catch (IllegalArgumentException e) {
+                    item.setStatus(readyDate);
+                }
             }
             if (tr.select("a").size() > 0) {
                 item.setCancelData(tr.select("a").last().attr("href"));
@@ -923,7 +956,7 @@ public class IOpac extends BaseApi implements OpacApi {
     }
 
     @Override
-    public List<SearchField> getSearchFields() throws IOException {
+    public List<SearchField> parseSearchFields() throws IOException {
         List<SearchField> fields = new ArrayList<>();
 
         // Extract all search fields, except media types

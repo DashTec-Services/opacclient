@@ -2,21 +2,21 @@
  * Copyright (C) 2013 by Raphael Michel under the MIT license:
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), 
- * to deal in the Software without restriction, including without limitation 
- * the rights to use, copy, modify, merge, publish, distribute, sublicense, 
- * and/or sell copies of the Software, and to permit persons to whom the Software 
+ * of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the Software
  * is furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in 
+ * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
- * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, 
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+ * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
 package de.geeksfactory.opacclient.storage;
@@ -28,26 +28,34 @@ import android.database.sqlite.SQLiteOpenHelper;
 
 public class AccountDatabase extends SQLiteOpenHelper {
 
+    private static AccountDatabase instance;
     public static final String[] COLUMNS = {"id", "bib", "label", "name",
-            "password", "cached", "pendingFees", "validUntil", "warning", "passwordValid"};
+            "password", "cached", "pendingFees", "validUntil", "warning", "passwordValid",
+            "supportPolicyHintSeen"};
     public static final String[] COLUMNS_ALARMS = {"id", "deadline", "media", "alarm",
             "notified", "finished"};
     // CHANGE THIS
     public static final String[] COLUMNS_LENT = {"id", "account", "title", "author", "format",
             "itemid", "status", "barcode", "deadline", "homebranch", "lending_branch",
-            "prolong_data", "renewable", "download_data", "ebook"};
+            "prolong_data", "renewable", "download_data", "ebook", "mediatype", "cover",
+            "coverBitmap"};
     public static final String[] COLUMNS_RESERVATIONS = {"id", "account", "title", "author",
             "format", "itemid", "status", "ready", "expiration", "branch", "cancel_data",
-            "booking_data"};
+            "booking_data", "mediatype", "cover", "coverBitmap"};
     public static final String TABLENAME_ACCOUNTS = "accounts";
     public static final String TABLENAME_LENT = "accountdata_lent";
     public static final String TABLENAME_RESERVATION = "accountdata_reservations";
     public static final String TABLENAME_ALARMS = "alarms";
     private static final String DATABASE_NAME = "accounts.db";
-    private static final int DATABASE_VERSION = 26; // REPLACE ONUPGRADE IF YOU
+    private static final int DATABASE_VERSION = 29; // REPLACE ONUPGRADE IF YOU
 
-    public AccountDatabase(Context context) {
+    private AccountDatabase(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
+    }
+
+    public static synchronized AccountDatabase getInstance(Context context) {
+        if (instance == null) instance = new AccountDatabase(context);
+        return instance;
     }
 
     @Override
@@ -56,18 +64,20 @@ public class AccountDatabase extends SQLiteOpenHelper {
                 + "accounts ( id integer primary key autoincrement,"
                 + " bib text," + " label text," + " name text,"
                 + " password text," + " cached integer," + " pendingFees text,"
-                + " validUntil text," + " warning text," + " passwordValid integer" + ");");
+                + " validUntil text," + " warning text," + " passwordValid integer," +
+                " supportPolicyHintSeen integer" + ");");
         db.execSQL(
                 "create table " + "accountdata_lent (" + "id integer primary key autoincrement," +
                         "account integer," + "title text," + "author text," + "format text," +
                         "itemid text," + "status text," + "barcode text," + "deadline text," +
                         "homebranch text," + "lending_branch text," + "prolong_data text," +
-                        "renewable integer," + "download_data text," + "ebook integer" + ");");
+                        "renewable integer," + "download_data text," + "ebook integer," +
+                        "mediatype text," + "cover text," + "coverBitmap blob" + ");");
         db.execSQL("create table " + "accountdata_reservations (" +
                 "id integer primary key autoincrement," + "account integer," + "title text," +
                 "author text," + "format text," + "itemid text," + "status text," + "ready text," +
-                "expiration text," + "branch text," + "cancel_data text," + "booking_data text" +
-                ");");
+                "expiration text," + "branch text," + "cancel_data text," + "booking_data text," +
+                "mediatype text," + "cover text," + "coverBitmap blob" + ");");
         db.execSQL("create table " + "alarms (" + "id integer primary key autoincrement," +
                 "deadline text," + "media text," + "alarm text," + "notified integer," +
                 "finished integer" + ");");
@@ -202,7 +212,19 @@ public class AccountDatabase extends SQLiteOpenHelper {
                 // it already exists, do nothing
             }
         }
-
+        if (oldVersion < 27) {
+            db.execSQL("alter table accountdata_lent add column mediatype text");
+            db.execSQL("alter table accountdata_lent add column cover text");
+            db.execSQL("alter table accountdata_reservations add column mediatype text");
+            db.execSQL("alter table accountdata_reservations add column cover text");
+        }
+        if (oldVersion < 28) {
+            db.execSQL("alter table accounts add column supportPolicyHintSeen integer");
+        }
+        if (oldVersion < 29) {
+            db.execSQL("alter table accountdata_lent add column coverBitmap blob");
+            db.execSQL("alter table accountdata_reservations add column coverBitmap blob");
+        }
     }
 
 }

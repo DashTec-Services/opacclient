@@ -58,6 +58,7 @@ public interface StringProvider {
     String COULD_NOT_LOAD_DETAIL = "could_not_load_detail";
     String ERROR = "error";
     String DOWNLOAD = "download";
+    String STATUS = "status_detail";
     String REMINDERS = "reminders";
     String PROLONGED_ABBR = "prolonged_abbr";
     String FREE_SEARCH = "free_search";
@@ -79,6 +80,23 @@ public interface StringProvider {
     String RESERVATIONS_NUMBER = "reservations_number";
     String RESERVED_AT_DATE = "reserved_at_date";
     String LINK = "link";
+    String FEE_CONFIRMATION = "fee_confirmation";
+    String ALL = "all";
+    String DESCRIPTION = "description";
+    String RESERVATION_READY = "reservation_ready";
+    String PLEASE_CHANGE_PASSWORD = "please_change_password";
+    String PROLONG_ALL_NOT_POSSIBLE = "prolong_all_not_possible";
+    String PROLONG_ALL_NO_ITEMS = "prolong_all_no_items";
+    String HOLD = "hold";
+    String REQUEST_READY = "request_ready";
+    String READINGROOM = "readingroom";
+    String REQUEST_PROGRESS = "request_progress";
+    String RESERVED_POS = "reserved_pos";
+    String ITEM_COPY = "item_copy";
+    String RESERVED = "reserved";
+    String RENEWED = "renewed";
+    String NOT_YET_RENEWABLE = "not_yet_renewable";
+    String RENEW_ILL_SEPARATELY = "renew_ill_separately";
 
     /**
      * Returns the translated string identified by identifier

@@ -1,13 +1,12 @@
-apply plugin: 'com.jfrog.bintray'
 apply plugin: 'maven-publish'
 
 version = libraryVersion
-group = 'net.opacapp'
+group = 'com.github.opacapp'
 
 // Bintray
 Properties properties = new Properties()
 
-if( project.rootProject.file('local.properties').exists() ) {
+if (project.rootProject.file('local.properties').exists()) {
     properties.load(project.rootProject.file('local.properties').newDataInputStream())
 }
 
@@ -27,35 +26,12 @@ publishing {
     publications {
         maven(MavenPublication) {
             groupId publishedGroupId
-            artifactId artifact
+            artifactId "opacclient"
             version libraryVersion
 
             artifact sourcesJar
             artifact javadocJar
             from components.java
-        }
-    }
-}
-
-bintray {
-    user = properties.getProperty("bintray.user")
-    key = properties.getProperty("bintray.apikey")
-    publications = ['maven']
-
-    configurations = ['archives']
-    pkg {
-        userOrg = bintrayOrga
-        repo = bintrayRepo
-        name = bintrayName
-        desc = libraryDescription
-        websiteUrl = siteUrl
-        vcsUrl = gitUrl
-        licenses = allLicenses
-        publish = true
-        publicDownloadNumbers = true
-        version {
-            desc = libraryDescription
-            name = libraryVersion
         }
     }
 }

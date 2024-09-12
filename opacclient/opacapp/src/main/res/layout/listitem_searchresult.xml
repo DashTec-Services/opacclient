@@ -1,27 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+                xmlns:tools="http://schemas.android.com/tools"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:background="@drawable/list_selector"
-                android:padding="5dip">
+                android:padding="5dip"
+                style="@style/searchListItem">
 
     <ImageView
-        android:id="@+id/ivType"
+        android:id="@+id/ivCover"
         android:layout_width="56dp"
         android:layout_height="56dp"
         android:layout_alignParentLeft="true"
         android:layout_alignParentTop="true"
         android:layout_marginRight="10dip"
+        android:contentDescription="@string/cover"
         android:gravity="center"
+        android:transitionName="@string/transition_cover"
+        tools:srcCompat="@tools:sample/avatars[0]"/>
+
+    <ImageView
+        android:id="@+id/ivType"
+        android:layout_width="28dp"
+        android:layout_height="28dp"
+        android:paddingLeft="8dp"
+        android:paddingTop="8dp"
+        android:background="@drawable/quarter_circle"
+        android:layout_alignBottom="@+id/ivCover"
+        android:layout_alignEnd="@+id/ivCover"
+        android:layout_alignRight="@+id/ivCover"
         android:contentDescription="@string/mediatype"
-        android:src="@drawable/ic_launcher"
-        android:transitionName="@string/transition_cover"/>
+        android:gravity="center"
+        tools:srcCompat="@drawable/type_book"
+        tools:ignore="RtlSymmetry"/>
 
     <ImageView
         android:id="@+id/ivStatus"
-        android:layout_width="10dp"
-        android:layout_height="10dp"
+        android:layout_width="16dp"
+        android:layout_height="16dp"
         android:layout_alignParentRight="true"
         android:layout_centerVertical="true"
         android:visibility="gone"
@@ -36,5 +53,5 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_toLeftOf="@id/ivStatus"
-        android:layout_toRightOf="@id/ivType"/>
+        android:layout_toRightOf="@id/ivCover"/>
 </RelativeLayout>

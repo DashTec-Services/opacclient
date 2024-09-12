@@ -21,6 +21,7 @@
  */
 package de.geeksfactory.opacclient.frontend;
 
+import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -30,19 +31,7 @@ import android.content.res.Configuration;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
-import android.preference.PreferenceManager;
-import android.support.design.widget.FloatingActionButton;
-import android.support.design.widget.NavigationView;
-import android.support.v4.app.ActivityOptionsCompat;
-import android.support.v4.app.Fragment;
-import android.support.v4.app.FragmentManager;
-import android.support.v4.app.FragmentTransaction;
-import android.support.v4.view.ViewCompat;
-import android.support.v4.widget.DrawerLayout;
-import android.support.v7.app.ActionBarDrawerToggle;
-import android.support.v7.app.AlertDialog;
-import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
+import androidx.preference.PreferenceManager;
 import android.transition.TransitionInflater;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
@@ -62,14 +51,28 @@ import android.widget.ListView;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 
+import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import com.google.android.material.navigation.NavigationView;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
 
+import androidx.appcompat.app.ActionBarDrawerToggle;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.app.ActivityOptionsCompat;
+import androidx.core.view.ViewCompat;
+import androidx.drawerlayout.widget.DrawerLayout;
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager;
+import androidx.fragment.app.FragmentTransaction;
 import de.geeksfactory.opacclient.OpacClient;
 import de.geeksfactory.opacclient.R;
 import de.geeksfactory.opacclient.objects.Account;
+import de.geeksfactory.opacclient.reminder.ReminderHelper;
 import de.geeksfactory.opacclient.storage.AccountDataSource;
 import de.geeksfactory.opacclient.ui.AccountSwitcherNavigationView;
 import de.geeksfactory.opacclient.utils.Utils;
@@ -101,7 +104,7 @@ public abstract class OpacActivity extends AppCompatActivity
     protected TextView accountWarning;
     protected LinearLayout accountData;
     protected boolean accountSwitcherVisible = false;
-    private DrawerAccountsAdapter accountsAdapter;
+    protected DrawerAccountsAdapter accountsAdapter;
 
     protected static void unbindDrawables(View view) {
         if (view == null) {
@@ -159,13 +162,11 @@ public abstract class OpacActivity extends AppCompatActivity
 
     protected void setupAccountSwitcher() {
         if (drawer == null || app.getAccount() == null) return;
-        aData.open();
         accounts = aData.getAllAccounts();
-        aData.close();
 
         Account selectedAccount = app.getAccount();
 
-        View header = drawer.getHeaderView(0);
+        final View header = drawer.getHeaderView(0);
         accountExpand = (ImageView) header.findViewById(R.id.account_expand);
         accountTitle = (TextView) header.findViewById(R.id.account_title);
         accountSubtitle = (TextView) header.findViewById(R.id.account_subtitle);
@@ -180,6 +181,21 @@ public abstract class OpacActivity extends AppCompatActivity
         };
         accountData.setOnClickListener(l);
         //accountExpand.setOnClickListener(l);
+
+        final SharedPreferences sp = PreferenceManager
+                .getDefaultSharedPreferences(OpacActivity.this);
+        boolean show_toggle_notice = !sp.contains("seen_drawer_toggle_notice");
+        header.findViewById(R.id.toggle_notice)
+              .setVisibility(show_toggle_notice ? View.VISIBLE : View.GONE);
+        header.findViewById(R.id.btToggleNotice).setOnClickListener(
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        sp.edit().putBoolean("seen_drawer_toggle_notice", true).apply();
+                        header.findViewById(R.id.toggle_notice)
+                              .setVisibility(View.GONE);
+                    }
+                });
 
         accountsAdapter = new DrawerAccountsAdapter(this, accounts, app.getAccount());
         drawer.setAccountsAdapter(accountsAdapter);
@@ -204,13 +220,15 @@ public abstract class OpacActivity extends AppCompatActivity
     }
 
     /**
-     * Fix status bar flashing problem during transitions by excluding the status bar background from transitions
+     * Fix status bar flashing problem during transitions by excluding the status bar background
+     * from transitions
      */
     @TargetApi(21)
     private void fixStatusBarFlashing() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             getWindow().getEnterTransition().excludeTarget(android.R.id.statusBarBackground, true);
-            getWindow().getReenterTransition().excludeTarget(android.R.id.statusBarBackground, true);
+            getWindow().getReenterTransition()
+                       .excludeTarget(android.R.id.statusBarBackground, true);
             getWindow().getReturnTransition().excludeTarget(android.R.id.statusBarBackground, true);
             getWindow().getExitTransition().excludeTarget(android.R.id.statusBarBackground, true);
         }
@@ -256,14 +274,14 @@ public abstract class OpacActivity extends AppCompatActivity
                     };
 
             // Set the drawer toggle as the DrawerListener
-            drawerLayout.setDrawerListener(new DrawerLayout.DrawerListener() {
+            drawerLayout.addDrawerListener(new DrawerLayout.DrawerListener() {
                 @Override
                 public void onDrawerSlide(View drawerView, float slideOffset) {
                     drawerToggle.onDrawerSlide(drawerView, slideOffset);
                 }
 
                 @Override
-                public void onDrawerOpened(View drawerView) {
+                public void onDrawerOpened(final View drawerView) {
                     drawerToggle.onDrawerOpened(drawerView);
                 }
 
@@ -306,7 +324,7 @@ public abstract class OpacActivity extends AppCompatActivity
                                 .getDefaultSharedPreferences(OpacActivity.this);
                         drawerLayout.openDrawer(drawer);
                         sp.edit().putBoolean("version2.0.0-introduced", true)
-                          .commit();
+                          .apply();
                     }
                 }, 500);
 
@@ -344,6 +362,14 @@ public abstract class OpacActivity extends AppCompatActivity
         setTwoPane(twoPane);
         super.onResume();
         fixNavigationSelection();
+
+        Handler handler = new Handler();
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                setFabVisible(fragment instanceof SearchFragment);
+            }
+        }, 300);
     }
 
     protected void fixNavigationSelection() {
@@ -428,10 +454,14 @@ public abstract class OpacActivity extends AppCompatActivity
         try {
             if (previousFragment instanceof SearchFragment &&
                     fragment instanceof AccountFragment && previousFragment.getView() != null) {
+                ViewCompat.setTransitionName(previousFragment.getView().findViewById(R.id
+                        .rlSimpleSearch), getString(R.string.transition_gray_box));
                 transaction.addSharedElement(previousFragment.getView().findViewById(R.id
                         .rlSimpleSearch), getString(R.string.transition_gray_box));
             } else if (previousFragment instanceof AccountFragment &&
                     fragment instanceof SearchFragment && previousFragment.getView() != null) {
+                ViewCompat.setTransitionName(previousFragment.getView().findViewById(R.id
+                        .rlAccHeader), getString(R.string.transition_gray_box));
                 transaction.addSharedElement(previousFragment.getView().findViewById(R.id
                         .rlAccHeader), getString(R.string.transition_gray_box));
             }
@@ -510,14 +540,13 @@ public abstract class OpacActivity extends AppCompatActivity
                     stream.close();
                 } catch (IOException e) {
                     AccountDataSource data = new AccountDataSource(this);
-                    data.open();
                     data.remove(app.getAccount());
                     List<Account> available_accounts = data.getAllAccounts();
                     if (available_accounts.size() > 0) {
                         ((OpacClient) getApplication())
                                 .setAccount(available_accounts.get(0).getId());
                     }
-                    data.close();
+                    new ReminderHelper(app).generateAlarms();
                     if (app.getLibrary() != null) {
                         return;
                     }
@@ -542,10 +571,7 @@ public abstract class OpacActivity extends AppCompatActivity
         if (account == null) return;
         SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(this);
         int tolerance = Integer.parseInt(sp.getString("notification_warning", "3"));
-
-        aData.open();
         int expiring = aData.getExpiring(account, tolerance);
-        aData.close();
 
         accountTitle.setText(Utils.getAccountTitle(account, this));
         accountSubtitle.setText(Utils.getAccountSubtitle(account, this));
@@ -567,9 +593,7 @@ public abstract class OpacActivity extends AppCompatActivity
 
         ListView lv = (ListView) view.findViewById(R.id.lvBibs);
         AccountDataSource data = new AccountDataSource(this);
-        data.open();
         final List<Account> accounts = data.getAllAccounts();
-        data.close();
         AccountListAdapter adapter = new AccountListAdapter(this, accounts);
         lv.setAdapter(adapter);
         lv.setOnItemClickListener(new OnItemClickListener() {
@@ -625,6 +649,7 @@ public abstract class OpacActivity extends AppCompatActivity
         return findViewById(R.id.content_frame_right) != null;
     }
 
+    @SuppressLint("WrongViewCast")
     protected void setTwoPane(boolean active) {
         twoPane = active;
         if (isTablet()) {

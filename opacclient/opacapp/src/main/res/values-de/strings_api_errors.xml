@@ -40,9 +40,13 @@
   <string name="provision_branch">Bereit: %s</string>
   <string name="unsupported_in_library">Diese Funktion wird in dieser Bibliothek nicht unterstützt.</string>
   <string name="reservation_warning">Für diese Vorbestellung fallen möglicherweise Gebühren an.</string>
-  <string name="reservations_number">%s Reservierungen</string>
+  <plurals name="reservations_number">
+    <item quantity="one">Eine Reservierung</item>
+    <item quantity="other">%d Reservierungen</item>
+  </plurals>
   <string name="reserved_at_date">res. am %s</string>
   <string name="link">Link</string>
+  <string name="status_detail">Status</string>
 
   <string name="mediatype_none">keiner</string>
   <string name="mediatype_book">Buch</string>
@@ -76,4 +80,24 @@
   <string name="mediatype_evideo">eVideo</string>
   <string name="mediatype_edoc">eDoc</string>
   <string name="mediatype_eaudio">eAudio</string>
+  <string name="mediatype_device">Gerät</string>
+  <string name="mediatype_microform">Microform</string>
+  <string name="mediatype_figurine">Figur</string>
+  <string name="fee_confirmation">Gebühr: %s</string>
+  <string name="all">Alle</string>
+  <string name="description">Beschreibung</string>
+  <string name="reservation_ready">Abholbereit</string>
+  <string name="please_change_password">Die Bibliothek fordert Sie auf, Ihr Passwort zu ändern. Bitte loggen Sie sich dazu auf der Bibliothekswebsite ein, um das Passwort zu ändern, und geben dann das neue Passwort in der App ein.</string>
+  <string name="prolong_all_not_possible">Eine Verlängerung aller Medien ist momentan nicht möglich.</string>
+  <string name="prolong_all_no_items">Es sind keine Medien verlängerbar.</string>
+  <string name="hold">liegt seit %s bereit</string>
+  <string name="request_ready">seit %s abholbereit (Magazinbestellung)</string>
+  <string name="readingroom">liegt seit %s zur Benutzung in Bibliothek bereit</string>
+  <string name="request_progress">Magazinbestellung seit %s in Arbeit</string>
+  <string name="reserved_pos">vorgemerkt, Pos. %s</string>
+  <string name="item_copy">Exemplar</string>
+  <string name="reserved">vorgemerkt</string>
+  <string name="renewed">%dx verlängert</string>
+  <string name="not_yet_renewable">noch nicht verlängerbar</string>
+  <string name="renew_ill_separately">Fernleihmedien bitte einzeln verlängern.</string>
 </resources>

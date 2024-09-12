@@ -1,20 +1,38 @@
-apply plugin: 'java'
+plugins {
+    id 'org.jetbrains.kotlin.jvm' version '1.3.72'
+}
+apply plugin: 'java-library'
+apply plugin: 'kotlin'
 
-sourceCompatibility = JavaVersion.VERSION_1_7
-targetCompatibility = JavaVersion.VERSION_1_7
+sourceCompatibility = JavaVersion.VERSION_1_8
+targetCompatibility = JavaVersion.VERSION_1_8
 
 [compileJava, compileTestJava]*.options*.encoding = 'UTF-8'
 
 dependencies {
+// Kotlin
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.4.10'
+
+// Other
     // Use older org.json version to have an environment equivalent to the android platform
-    compile 'org.json:json:20090211'
-    compile 'org.jsoup:jsoup:1.8.3'
-    compile 'org.apache.httpcomponents:httpmime:4.3.6'
-    compile 'joda-time:joda-time:2.8.2'
-    testCompile "junit:junit:4.12"
+    api 'org.json:json:20090211'
+    implementation 'org.jsoup:jsoup:1.8.3'
+    implementation 'org.apache.httpcomponents:httpmime:4.5.12'
+    api 'joda-time:joda-time:2.10.6'
+    api 'com.squareup.okhttp3:okhttp:4.9.1'
+    api 'com.squareup.okhttp3:okhttp-urlconnection:4.9.1'
+    implementation 'net.sourceforge.streamsupport:streamsupport-cfuture:1.7.2'
+
+// Testing
+    testImplementation 'junit:junit:4.13'
+    testImplementation 'org.hamcrest:hamcrest:2.2'
+    testImplementation 'org.hamcrest:hamcrest-library:2.2'
+    testImplementation 'org.mockito:mockito-core:3.8.0'
+    testImplementation 'com.shazam:shazamcrest:0.11'
 }
+
 task copyTestResources(type: Copy) {
-    from "${projectDir}/src/test/resources"
+    from "${projectDir}/src/test/resources", "${projectDir}/src/main/resources"
     into "${buildDir}/classes/test"
 }
 
@@ -22,20 +40,16 @@ processTestResources.dependsOn copyTestResources
 
 
 ext {
-    bintrayOrga = 'opacapp'
-    bintrayRepo = 'libs'
-    bintrayName = 'libopac'
-
-    publishedGroupId = 'net.opacapp'
+    publishedGroupId = 'com.github.opacapp'
     libraryName = 'OPAC communication adapter'
-    artifact = 'libopac'
+    artifact = 'opacclient'
 
     libraryDescription = "A library to access the data from various library OPACs"
 
     siteUrl = 'https://github.com/opacapp/opacclient'
     gitUrl = 'https://github.com/opacapp/opacclient.git'
 
-    libraryVersion = '4.5.0-rc-2'
+    libraryVersion = '6.4.13'
 
     developerId = 'opacapp'
     developerName = 'Web Opac App'
@@ -47,3 +61,16 @@ ext {
 }
 
 apply from: '../bintray.gradle'
+repositories {
+    mavenCentral()
+}
+compileKotlin {
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+}
+compileTestKotlin {
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+}

@@ -1,23 +1,20 @@
 package de.geeksfactory.opacclient.frontend;
 
 import android.annotation.SuppressLint;
-import android.app.Activity;
+import android.annotation.TargetApi;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.net.ConnectivityManager;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
-import android.preference.PreferenceManager;
-import android.support.design.widget.AppBarLayout;
-import android.support.v4.app.Fragment;
-import android.support.v7.app.AlertDialog;
-import android.support.v7.graphics.Palette;
-import android.support.v7.widget.LinearLayoutManager;
-import android.support.v7.widget.RecyclerView;
-import android.support.v7.widget.Toolbar;
+import android.print.PrintAttributes;
+import android.print.PrintDocumentAdapter;
+import android.print.PrintManager;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.Menu;
@@ -27,6 +24,8 @@ import android.view.View;
 import android.view.View.OnClickListener;
 import android.view.ViewGroup;
 import android.view.animation.AnimationUtils;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemClickListener;
 import android.widget.CheckBox;
@@ -37,12 +36,25 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import net.opacapp.multilinecollapsingtoolbar.CollapsingToolbarLayout;
+import com.google.android.material.appbar.AppBarLayout;
+import com.google.android.material.appbar.CollapsingToolbarLayout;
+
+import org.joda.time.LocalDate;
+import org.joda.time.format.DateTimeFormat;
+import org.json.JSONException;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.util.List;
 
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.net.ConnectivityManagerCompat;
+import androidx.fragment.app.Fragment;
+import androidx.palette.graphics.Palette;
+import androidx.preference.PreferenceManager;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 import de.geeksfactory.opacclient.OpacClient;
 import de.geeksfactory.opacclient.R;
 import de.geeksfactory.opacclient.apis.EbookServiceApi;
@@ -54,17 +66,21 @@ import de.geeksfactory.opacclient.frontend.MultiStepResultHelper.Callback;
 import de.geeksfactory.opacclient.frontend.MultiStepResultHelper.StepTask;
 import de.geeksfactory.opacclient.networking.CoverDownloadTask;
 import de.geeksfactory.opacclient.objects.Account;
+import de.geeksfactory.opacclient.objects.Copy;
 import de.geeksfactory.opacclient.objects.CoverHolder;
 import de.geeksfactory.opacclient.objects.Detail;
-import de.geeksfactory.opacclient.objects.DetailledItem;
+import de.geeksfactory.opacclient.objects.DetailedItem;
+import de.geeksfactory.opacclient.objects.Library;
 import de.geeksfactory.opacclient.objects.SearchResult;
 import de.geeksfactory.opacclient.storage.AccountDataSource;
+import de.geeksfactory.opacclient.storage.PreferenceDataSource;
 import de.geeksfactory.opacclient.storage.StarDataSource;
 import de.geeksfactory.opacclient.ui.AppCompatProgressDialog;
 import de.geeksfactory.opacclient.ui.WhitenessUtils;
 import de.geeksfactory.opacclient.utils.BitmapUtils;
 import de.geeksfactory.opacclient.utils.CompatibilityUtils;
 import de.geeksfactory.opacclient.utils.ErrorReporter;
+import de.geeksfactory.opacclient.utils.PrintUtils;
 import su.j2e.rvjoiner.JoinableAdapter;
 import su.j2e.rvjoiner.JoinableLayout;
 import su.j2e.rvjoiner.RvJoiner;
@@ -80,6 +96,8 @@ public class SearchResultDetailFragment extends Fragment
      * The fragment argument representing the item ID that this fragment represents.
      */
     public static final String ARG_ITEM_ID = "item_id";
+    public static final String ARG_ITEM_LIBRARY_IDENT = "item_library_ident";
+    public static final String ARG_IS_META_SEARCH = "is_meta_search";
 
     public static final String ARG_ITEM_NR = "item_nr";
     public static final String ARG_ITEM_COVER_BITMAP = "item_cover_bitmap";
@@ -114,7 +132,9 @@ public class SearchResultDetailFragment extends Fragment
     /**
      * The detailled item that this fragment represents.
      */
-    private DetailledItem item;
+    private DetailedItem item;
+    private String libraryIdent;
+    private Account currentAccout;
     private String id;
     private Integer nr;
     private OpacClient app;
@@ -181,13 +201,13 @@ public class SearchResultDetailFragment extends Fragment
                 R.layout.error_connectivity, errorView);
 
         connError.findViewById(R.id.btRetry)
-                 .setOnClickListener(new OnClickListener() {
-                     @Override
-                     public void onClick(View v) {
-                         errorView.removeAllViews();
-                         reload();
-                     }
-                 });
+                .setOnClickListener(new OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        errorView.removeAllViews();
+                        reload();
+                    }
+                });
 
         progressBar.startAnimation(AnimationUtils.loadAnimation(getActivity(),
                 android.R.anim.fade_out));
@@ -204,30 +224,39 @@ public class SearchResultDetailFragment extends Fragment
         setProgress(progress, false);
     }
 
-    private void load(int nr, String id) {
-        setProgress(true, true);
+    private void load(String libraryIdent, int nr, String id) {
+        this.libraryIdent = libraryIdent;
         this.id = id;
         this.nr = nr;
-        ft = new FetchTask(nr, id);
+
+        OpacApi apiToUse;
+        try {
+            apiToUse = getCurrentApi();
+        } catch (OpacClient.LibraryRemovedException e) {
+            return;
+        }
+
+        setProgress(true, true);
+
+        ft = new FetchTask(apiToUse, nr, id);
         ft.execute();
     }
 
     private void reload() {
-        load(nr, id);
+        load(libraryIdent, nr, id);
     }
 
     @Override
-    public void onAttach(Activity activity) {
-        super.onAttach(activity);
-        app = (OpacClient) activity.getApplication();
-
+    public void onAttach(Context context) {
+        super.onAttach(context);
+        app = (OpacClient) context.getApplicationContext();
         // Activities containing this fragment must implement its callbacks.
-        if (!(activity instanceof Callbacks)) {
+        if (!(context instanceof Callbacks)) {
             throw new IllegalStateException(
                     "Activity must implement fragment's callbacks.");
         }
 
-        callbacks = (Callbacks) activity;
+        callbacks = (Callbacks) context;
     }
 
     @Override
@@ -235,11 +264,33 @@ public class SearchResultDetailFragment extends Fragment
         super.onViewCreated(view, savedInstanceState);
         if (item != null) {
             display();
-        } else if (getArguments().containsKey(ARG_ITEM_ID)
-                || getArguments().containsKey(ARG_ITEM_NR)) {
-            load(getArguments().getInt(ARG_ITEM_NR),
-                    getArguments().getString(ARG_ITEM_ID));
+        } else if (argumentLibraryIdentAvailable() && (argumentIdAvailable() || argumentNrAvailable())) {
+            load(getLibraryIdent(), getArgumentNr(), getArgumentId());
         }
+    }
+
+    private boolean argumentIdAvailable() {
+        return getArguments().containsKey(ARG_ITEM_ID);
+    }
+
+    private boolean argumentNrAvailable() {
+        return getArguments().containsKey(ARG_ITEM_NR);
+    }
+
+    private boolean argumentLibraryIdentAvailable() {
+        return getArguments().containsKey(ARG_ITEM_LIBRARY_IDENT);
+    }
+
+    private String getLibraryIdent() {
+        return getArguments().getString(ARG_ITEM_LIBRARY_IDENT);
+    }
+
+    private String getArgumentId() {
+        return getArguments().getString(ARG_ITEM_ID);
+    }
+
+    private int getArgumentNr() {
+        return getArguments().getInt(ARG_ITEM_NR);
     }
 
     @Override
@@ -252,7 +303,7 @@ public class SearchResultDetailFragment extends Fragment
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container,
-            Bundle savedInstanceState) {
+                             Bundle savedInstanceState) {
         View rootView = inflater.inflate(R.layout.fragment_searchresult_detail,
                 container, false);
         view = rootView;
@@ -262,7 +313,7 @@ public class SearchResultDetailFragment extends Fragment
         if (getActivity() instanceof SearchResultDetailActivity) {
             // This applies on phones, where the Toolbar is also the
             // main ActionBar of the Activity and needs a back button
-            toolbar.setNavigationIcon(R.drawable.abc_ic_ab_back_mtrl_am_alpha);
+            toolbar.setNavigationIcon(R.drawable.ic_arrow_back_white_24dp);
             toolbar.setNavigationOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
@@ -321,6 +372,8 @@ public class SearchResultDetailFragment extends Fragment
             image_analyzed = true;
         } catch (IllegalArgumentException ignored) {
             Log.w("analyzeCover", "Invalid bitmap received");
+            gradientBottom.setVisibility(View.GONE);
+            gradientTop.setVisibility(View.GONE);
         }
     }
 
@@ -366,11 +419,6 @@ public class SearchResultDetailFragment extends Fragment
         addSubhead(joiner, R.string.details_head);
         joiner.add(new JoinableAdapter(new DetailsAdapter(item.getDetails(), getActivity())));
 
-        if (item.getCopies().size() != 0) {
-            addSubhead(joiner, R.string.copies_head);
-            joiner.add(new JoinableAdapter(new CopiesAdapter(item.getCopies(), getActivity())));
-        }
-
         if (item.getVolumesearch() != null) {
             addSubhead(joiner, R.string.volumes);
             joiner.add(new JoinableLayout(
@@ -388,6 +436,11 @@ public class SearchResultDetailFragment extends Fragment
         } else if (item.getVolumes().size() > 0) {
             addSubhead(joiner, R.string.volumes);
             joiner.add(new JoinableAdapter(new VolumesAdapter(item.getVolumes(), getActivity())));
+        }
+
+        if (item.getCopies().size() != 0) {
+            addSubhead(joiner, R.string.copies_head);
+            joiner.add(new JoinableAdapter(new CopiesAdapter(item.getCopies(), getActivity())));
         }
 
         rvDetails.setAdapter(joiner.getAdapter());
@@ -464,29 +517,29 @@ public class SearchResultDetailFragment extends Fragment
         }
         AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
         builder.setMessage(getString(R.string.opac_error) + " " + s)
-               .setCancelable(false)
-               .setNegativeButton(R.string.close,
-                       new DialogInterface.OnClickListener() {
-                           @Override
-                           public void onClick(DialogInterface dialog, int id) {
-                               dialog.cancel();
-                               if (finish) {
-                                   callbacks.removeFragment();
-                               }
-                           }
-                       })
-               .setPositiveButton(R.string.prefs,
-                       new DialogInterface.OnClickListener() {
-                           @Override
-                           public void onClick(DialogInterface dialog, int id) {
-                               Intent intent = new Intent(getActivity(),
-                                       AccountEditActivity.class);
-                               intent.putExtra(
-                                       AccountEditActivity.EXTRA_ACCOUNT_ID,
-                                       app.getAccount().getId());
-                               startActivity(intent);
-                           }
-                       });
+                .setCancelable(false)
+                .setNegativeButton(R.string.close,
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int id) {
+                                dialog.cancel();
+                                if (finish) {
+                                    callbacks.removeFragment();
+                                }
+                            }
+                        })
+                .setPositiveButton(R.string.prefs,
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int id) {
+                                Intent intent = new Intent(getActivity(),
+                                        AccountEditActivity.class);
+                                intent.putExtra(
+                                        AccountEditActivity.EXTRA_ACCOUNT_ID,
+                                        getCurrentAccount().getId());
+                                startActivity(intent);
+                            }
+                        });
         AlertDialog alert = builder.create();
         alert.show();
     }
@@ -522,6 +575,8 @@ public class SearchResultDetailFragment extends Fragment
     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
         inflater.inflate(R.menu.search_result_details_activity, menu);
         refreshMenu(menu);
+        menu.findItem(R.id.action_print).setVisible(
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT);
         super.onCreateOptionsMenu(menu, inflater);
     }
 
@@ -532,8 +587,14 @@ public class SearchResultDetailFragment extends Fragment
             } else {
                 menu.findItem(R.id.action_reservation).setVisible(false);
             }
-            if (item.isBookable() && app.getApi() instanceof EbookServiceApi) {
-                if (((EbookServiceApi) app.getApi()).isEbook(item)) {
+            OpacApi api;
+            try {
+                api = getCurrentApi();
+            } catch (OpacClient.LibraryRemovedException e) {
+                return;
+            }
+            if (item.isBookable() && api instanceof EbookServiceApi) {
+                if (((EbookServiceApi) api).isEbook(item)) {
                     menu.findItem(R.id.action_lendebook).setVisible(true);
                 } else {
                     menu.findItem(R.id.action_lendebook).setVisible(false);
@@ -549,15 +610,19 @@ public class SearchResultDetailFragment extends Fragment
             menu.findItem(R.id.action_tocollection).setVisible(false);
         }
 
-        String bib = app.getLibrary().getIdent();
+        String bib = getLibraryIdent();
         StarDataSource data = new StarDataSource(getActivity());
-        if ((id == null || id.equals("")) && item != null) {
+        String _id = id;
+        if (item != null) {
+            _id = item.getId();
+        }
+        if ((_id == null || _id.equals("")) && item != null) {
             if (data.isStarredTitle(bib, item.getTitle())) {
                 menu.findItem(R.id.action_star).setIcon(
                         R.drawable.ic_star_1_white_24dp);
             }
         } else {
-            if (data.isStarred(bib, id)) {
+            if (data.isStarred(bib, _id)) {
                 menu.findItem(R.id.action_star).setIcon(
                         R.drawable.ic_star_1_white_24dp);
             }
@@ -572,7 +637,7 @@ public class SearchResultDetailFragment extends Fragment
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
 
-        final String bib = app.getLibrary().getIdent();
+        final String bib = getLibraryIdent();
         if (item.getItemId() == R.id.action_reservation) {
             reservationStart();
             return true;
@@ -609,6 +674,12 @@ public class SearchResultDetailFragment extends Fragment
                 builder.setItems(items, new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int di) {
+                        OpacApi api = null;
+                        try {
+                            api = getCurrentApi();
+                        } catch (OpacClient.LibraryRemovedException e) {
+                            return;
+                        }
                         if (di == 0) {
                             // Share link
                             Intent intent = new Intent(
@@ -627,7 +698,7 @@ public class SearchResultDetailFragment extends Fragment
                             } catch (UnsupportedEncodingException e) {
                             }
 
-                            String shareUrl = app.getApi().getShareUrl(id, t);
+                            String shareUrl = api.getShareUrl(id, t);
                             if (shareUrl != null) {
                                 intent.putExtra(Intent.EXTRA_TEXT, shareUrl);
                                 startActivity(Intent.createChooser(intent,
@@ -656,7 +727,7 @@ public class SearchResultDetailFragment extends Fragment
                             } catch (UnsupportedEncodingException e) {
                             }
 
-                            String text = t + "\n\n";
+                            String text = title + "\n\n";
 
                             for (Detail detail : getItem().getDetails()) {
                                 String colon = "";
@@ -667,7 +738,83 @@ public class SearchResultDetailFragment extends Fragment
                                         + detail.getContent() + "\n\n";
                             }
 
-                            String shareUrl = app.getApi().getShareUrl(id, t);
+                            List<Copy> copies = getItem().getCopies();
+                            if (copies.size() > 0) {
+                                text += getString(R.string.copies_head) + ":\n\n";
+                            }
+
+                            for (Copy copy : copies) {
+                                String labelSeparator = ": ";
+                                String infoTypeSeparator = "\n";
+
+                                String branch = copy.getBranch();
+                                String branchTxt = "";
+                                if (branch != null && !branch.isEmpty()) {
+                                    branchTxt += getString(R.string.branch) + labelSeparator
+                                            + branch + infoTypeSeparator;
+                                }
+
+                                String iss = copy.getIssue();
+                                String issTxt = "";
+                                if (iss != null && !iss.isEmpty()) {
+                                    issTxt += getString(R.string.issue) + labelSeparator
+                                            + iss + infoTypeSeparator;
+                                }
+
+                                String dept = copy.getDepartment();
+                                String deptTxt = "";
+                                if (dept != null && !dept.isEmpty()) {
+                                    deptTxt += getString(R.string.department) + labelSeparator
+                                            + dept + infoTypeSeparator;
+                                }
+
+                                String loc = copy.getLocation();
+                                String locTxt = "";
+                                if (loc != null && !loc.isEmpty()) {
+                                    locTxt += getString(R.string.location) + labelSeparator
+                                            + loc + infoTypeSeparator;
+                                }
+
+                                String shelfMark = copy.getShelfmark();
+                                String shelfMarkTxt = "";
+                                if (shelfMark != null && !shelfMark.isEmpty()) {
+                                    shelfMarkTxt += getString(R.string.shelfmark) + labelSeparator
+                                            + shelfMark + infoTypeSeparator;
+                                }
+
+                                String status = copy.getStatus();
+                                String statusTxt = "";
+                                if (status != null && !status.isEmpty()) {
+                                    statusTxt += getString(R.string.status) + labelSeparator
+                                            + status + infoTypeSeparator;
+                                }
+
+                                String res = copy.getReservations();
+                                String resTxt = "";
+                                if (res != null && !res.isEmpty()) {
+                                    resTxt += getString(R.string.reservations) + labelSeparator
+                                            + res + infoTypeSeparator;
+                                }
+
+                                String url = copy.getUrl();
+                                String urlTxt = "";
+                                if (url != null && !url.isEmpty()) {
+                                    urlTxt += getString(R.string.url) + labelSeparator + url + infoTypeSeparator;
+                                }
+
+                                LocalDate retDate = copy.getReturnDate();
+                                String retDateTxt = "";
+                                if (retDate != null) {
+                                    retDateTxt += getString(R.string.return_date) + labelSeparator +
+                                            DateTimeFormat.shortDate().print(copy.getReturnDate())
+                                            + infoTypeSeparator;
+                                }
+
+                                text += branchTxt + deptTxt + locTxt + shelfMarkTxt + statusTxt +
+                                        resTxt + urlTxt + retDateTxt + "\n";
+                            }
+
+                            String shareUrl = api.getShareUrl(id, t);
                             if (shareUrl != null) {
                                 text += shareUrl;
                             }
@@ -693,15 +840,21 @@ public class SearchResultDetailFragment extends Fragment
             } else if (getItem().getId() == null
                     || getItem().getId().equals("")) {
                 final String title = getItem().getTitle();
-                if (star.isStarredTitle(bib, title)) {
-                    star.remove(star.getItemByTitle(bib, title));
-                    item.setIcon(R.drawable.ic_star_0_white_24dp);
-                } else {
-                    star.star(null, title, bib, getItem().getMediaType());
+                if (title == null || title.equals("")) {
                     Toast toast = Toast.makeText(getActivity(),
-                            getString(R.string.starred), Toast.LENGTH_SHORT);
+                            getString(R.string.star_unsupported), Toast.LENGTH_LONG);
                     toast.show();
-                    item.setIcon(R.drawable.ic_star_1_white_24dp);
+                } else {
+                    if (star.isStarredTitle(bib, title)) {
+                        star.remove(star.getItemByTitle(bib, title));
+                        item.setIcon(R.drawable.ic_star_0_white_24dp);
+                    } else {
+                        star.star(null, title, bib, getItem().getMediaType());
+                        Toast toast = Toast.makeText(getActivity(),
+                                getString(R.string.starred), Toast.LENGTH_SHORT);
+                        toast.show();
+                        item.setIcon(R.drawable.ic_star_1_white_24dp);
+                    }
                 }
             } else {
                 final String title = getItem().getTitle();
@@ -718,12 +871,45 @@ public class SearchResultDetailFragment extends Fragment
                 }
             }
             return true;
+        } else if (item.getItemId() == R.id.action_print) {
+            if (getItem() == null) {
+                Toast toast = Toast.makeText(getActivity(),
+                        getString(R.string.print_wait), Toast.LENGTH_SHORT);
+                toast.show();
+            } else {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                    print();
+                }
+            }
+
+            return true;
         } else {
             return super.onOptionsItemSelected(item);
         }
     }
 
-    public DetailledItem getItem() {
+    @TargetApi(Build.VERSION_CODES.KITKAT)
+    private void print() {
+        WebView webView = new WebView(getActivity());
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView webView, String url) {
+                PrintManager printManager = (PrintManager) getActivity()
+                        .getSystemService(Context.PRINT_SERVICE);
+                PrintDocumentAdapter printAdapter = webView.createPrintDocumentAdapter();
+                String jobName = getItem().getTitle();
+                if (jobName == null || jobName.equals("")) {
+                    jobName = getString(R.string.no_title);
+                }
+                printManager.print(jobName, printAdapter,
+                        new PrintAttributes.Builder().build());
+            }
+        });
+        String templateDetailles = PrintUtils.printDetails(getItem(), getContext());
+        webView.loadDataWithBaseURL(null, templateDetailles, "text/HTML", "UTF-8", null);
+    }
+
+    public DetailedItem getItem() {
         return item;
     }
 
@@ -733,26 +919,26 @@ public class SearchResultDetailFragment extends Fragment
         }
         AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
         builder.setMessage(R.string.status_nouser)
-               .setCancelable(false)
-               .setNegativeButton(R.string.close,
-                       new DialogInterface.OnClickListener() {
-                           @Override
-                           public void onClick(DialogInterface dialog, int id) {
-                               dialog.cancel();
-                           }
-                       })
-               .setPositiveButton(R.string.accounts_edit,
-                       new DialogInterface.OnClickListener() {
-                           @Override
-                           public void onClick(DialogInterface dialog, int id) {
-                               Intent intent = new Intent(getActivity(),
-                                       AccountEditActivity.class);
-                               intent.putExtra(
-                                       AccountEditActivity.EXTRA_ACCOUNT_ID,
-                                       app.getAccount().getId());
-                               startActivity(intent);
-                           }
-                       });
+                .setCancelable(false)
+                .setNegativeButton(R.string.close,
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int id) {
+                                dialog.cancel();
+                            }
+                        })
+                .setPositiveButton(R.string.accounts_edit,
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int id) {
+                                Intent intent = new Intent(getActivity(),
+                                        AccountEditActivity.class);
+                                intent.putExtra(
+                                        AccountEditActivity.EXTRA_ACCOUNT_ID,
+                                        getCurrentAccount().getId());
+                                startActivity(intent);
+                            }
+                        });
         AlertDialog alert = builder.create();
         alert.show();
     }
@@ -761,32 +947,38 @@ public class SearchResultDetailFragment extends Fragment
         if (invalidated) {
             new RestoreSessionTask(false).execute();
         }
-        if (app.getApi() instanceof EbookServiceApi) {
+        OpacApi api = null;
+        try {
+            api = getCurrentApi();
+        } catch (OpacClient.LibraryRemovedException e) {
+            return;
+        }
+        if (api instanceof EbookServiceApi) {
             SharedPreferences sp = PreferenceManager
                     .getDefaultSharedPreferences(getActivity());
             if (sp.getString("email", "").equals("")
-                    && ((EbookServiceApi) app.getApi()).isEbook(item)) {
+                    && ((EbookServiceApi) api).isEbook(item)) {
                 AlertDialog.Builder builder = new AlertDialog.Builder(
                         getActivity());
                 builder.setMessage(getString(R.string.opac_error_email))
-                       .setCancelable(false)
-                       .setNegativeButton(R.string.close,
-                               new DialogInterface.OnClickListener() {
-                                   @Override
-                                   public void onClick(DialogInterface dialog,
-                                           int id) {
-                                       dialog.cancel();
-                                   }
-                               })
-                       .setPositiveButton(R.string.prefs,
-                               new DialogInterface.OnClickListener() {
-                                   @Override
-                                   public void onClick(DialogInterface dialog,
-                                           int id) {
-                                       dialog.dismiss();
-                                       app.toPrefs(getActivity());
-                                   }
-                               });
+                        .setCancelable(false)
+                        .setNegativeButton(R.string.close,
+                                new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog,
+                                                        int id) {
+                                        dialog.cancel();
+                                    }
+                                })
+                        .setPositiveButton(R.string.prefs,
+                                new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog,
+                                                        int id) {
+                                        dialog.dismiss();
+                                        app.toPrefs(getActivity());
+                                    }
+                                });
                 AlertDialog alert = builder.create();
                 alert.show();
                 return;
@@ -794,22 +986,19 @@ public class SearchResultDetailFragment extends Fragment
         }
 
         AccountDataSource data = new AccountDataSource(getActivity());
-        data.open();
-        final List<Account> accounts = data.getAccountsWithPassword(app
-                .getLibrary().getIdent());
-        data.close();
+        final List<Account> accounts = data.getAccountsWithPassword(getLibraryIdent());
         if (accounts.size() == 0) {
             dialog_no_credentials();
         } else if (accounts.size() > 1
                 && !getActivity().getIntent().getBooleanExtra("reservation", false)
-                && (app.getApi().getSupportFlags() & OpacApi.SUPPORT_FLAG_CHANGE_ACCOUNT) != 0
+                && (api.getSupportFlags() & OpacApi.SUPPORT_FLAG_CHANGE_ACCOUNT) != 0
                 && !(SearchResultDetailFragment.this.id == null
                 || SearchResultDetailFragment.this.id.equals("null") ||
                 SearchResultDetailFragment.this.id
                         .equals(""))) {
             AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
             // Get the layout inflater
-            LayoutInflater inflater = getLayoutInflater(null);
+            LayoutInflater inflater = getActivity().getLayoutInflater();
 
             View view = inflater.inflate(R.layout.dialog_simple_list, null, false);
 
@@ -820,9 +1009,9 @@ public class SearchResultDetailFragment extends Fragment
             lv.setOnItemClickListener(new OnItemClickListener() {
                 @Override
                 public void onItemClick(AdapterView<?> parent, View view,
-                        int position, long id) {
-                    if (accounts.get(position).getId() != app.getAccount()
-                                                             .getId() || account_switched) {
+                                        int position, long id) {
+                    if (accounts.get(position).getId() != getCurrentAccount()
+                            .getId() || account_switched) {
 
                         if (SearchResultDetailFragment.this.id == null
                                 || SearchResultDetailFragment.this.id
@@ -831,9 +1020,11 @@ public class SearchResultDetailFragment extends Fragment
                                 .equals("")) {
                             Toast.makeText(getActivity(),
                                     R.string.accchange_sorry, Toast.LENGTH_LONG)
-                                 .show();
+                                    .show();
                         } else {
-                            app.setAccount(accounts.get(position).getId());
+                            if (getCurrentAccount().getId() != accounts.get(position).getId()) {
+                                app.setAccount(accounts.get(position).getId());
+                            }
                             Intent intent = new Intent(getActivity(),
                                     SearchResultDetailActivity.class);
                             intent.putExtra(
@@ -850,15 +1041,15 @@ public class SearchResultDetailFragment extends Fragment
                 }
             });
             builder.setTitle(R.string.account_select)
-                   .setView(view)
-                   .setNegativeButton(R.string.cancel,
-                           new DialogInterface.OnClickListener() {
-                               @Override
-                               public void onClick(DialogInterface dialog,
-                                       int id) {
-                                   adialog.cancel();
-                               }
-                           });
+                    .setView(view)
+                    .setNegativeButton(R.string.cancel,
+                            new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface dialog,
+                                                    int id) {
+                                    adialog.cancel();
+                                }
+                            });
             adialog = builder.create();
             adialog.show();
         } else {
@@ -868,75 +1059,88 @@ public class SearchResultDetailFragment extends Fragment
 
     public void reservationDo() {
         final SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(getActivity());
+        OpacApi api;
+        Library library;
+        try {
+            api = getCurrentApi();
+            library = app.getLibrary(getLibraryIdent());
+        } catch (OpacClient.LibraryRemovedException e) {
+            return;
+        } catch (JSONException e) {
+            return;
+        } catch (IOException e) {
+            return;
+        }
+
         if (sp.getBoolean("reservation_fee_warning_ignore", false) ||
-                (app.getApi().getSupportFlags() & OpacApi.SUPPORT_FLAG_WARN_RESERVATION_FEES) > 0) {
+                library.isSuppressFeeWarnings() ||
+                (api.getSupportFlags() & OpacApi.SUPPORT_FLAG_WARN_RESERVATION_FEES) > 0) {
             reservationPerform();
         } else {
             AlertDialog.Builder builder = new AlertDialog.Builder(
                     getActivity());
-            View content = getLayoutInflater(null).inflate(R.layout.dialog_reservation_fees, null);
+            View content = getActivity().getLayoutInflater()
+                                        .inflate(R.layout.dialog_reservation_fees, null);
             final CheckBox check = (CheckBox) content.findViewById(R.id.check_box1);
             builder.setView(content)
-                   .setCancelable(false)
-                   .setNegativeButton(R.string.cancel,
-                           new DialogInterface.OnClickListener() {
-                               @Override
-                               public void onClick(
-                                       DialogInterface dialog, int id) {
-                                   dialog.cancel();
-                               }
-                           })
-                   .setPositiveButton(R.string.reservation_fee_continue,
-                           new DialogInterface.OnClickListener() {
-                               @Override
-                               public void onClick(
-                                       DialogInterface dialog, int id) {
-                                   if (check.isChecked()) {
-                                       sp.edit().putBoolean("reservation_fee_warning_ignore", true).apply();
-                                   }
-                                   reservationPerform();
-                               }
-                           });
+                    .setCancelable(false)
+                    .setNegativeButton(R.string.cancel,
+                            new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(
+                                        DialogInterface dialog, int id) {
+                                    dialog.cancel();
+                                }
+                            })
+                    .setPositiveButton(R.string.reservation_fee_continue,
+                            new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(
+                                        DialogInterface dialog, int id) {
+                                    if (check.isChecked()) {
+                                        sp.edit().putBoolean("reservation_fee_warning_ignore", true).apply();
+                                    }
+                                    reservationPerform();
+                                }
+                            });
             AlertDialog alert = builder.create();
             alert.show();
         }
     }
 
     public void reservationPerform() {
-        MultiStepResultHelper<DetailledItem> msrhReservation = new MultiStepResultHelper<>(
+        MultiStepResultHelper<DetailedItem> msrhReservation = new MultiStepResultHelper<>(
                 getActivity(), item, R.string.doing_res);
-        msrhReservation.setCallback(new Callback<DetailledItem>() {
+        msrhReservation.setCallback(new Callback<DetailedItem>() {
             @Override
             public void onSuccess(MultiStepResult result) {
                 AccountDataSource adata = new AccountDataSource(getActivity());
-                adata.open();
-                adata.invalidateCachedAccountData(app.getAccount());
-                adata.close();
+                adata.invalidateCachedAccountData(getCurrentAccount());
                 if (result.getMessage() != null) {
                     AlertDialog.Builder builder = new AlertDialog.Builder(
                             getActivity());
                     builder.setMessage(result.getMessage())
-                           .setCancelable(false)
-                           .setNegativeButton(R.string.close,
-                                   new DialogInterface.OnClickListener() {
-                                       @Override
-                                       public void onClick(
-                                               DialogInterface dialog, int id) {
-                                           dialog.cancel();
-                                       }
-                                   })
-                           .setPositiveButton(R.string.account,
-                                   new DialogInterface.OnClickListener() {
-                                       @Override
-                                       public void onClick(
-                                               DialogInterface dialog, int id) {
-                                           Intent intent = new Intent(
-                                                   getActivity(), app.getMainActivity());
-                                           intent.putExtra(MainActivity.EXTRA_FRAGMENT, "account");
-                                           getActivity().startActivity(intent);
-                                           getActivity().finish();
-                                       }
-                                   });
+                            .setCancelable(false)
+                            .setNegativeButton(R.string.close,
+                                    new DialogInterface.OnClickListener() {
+                                        @Override
+                                        public void onClick(
+                                                DialogInterface dialog, int id) {
+                                            dialog.cancel();
+                                        }
+                                    })
+                            .setPositiveButton(R.string.account,
+                                    new DialogInterface.OnClickListener() {
+                                        @Override
+                                        public void onClick(
+                                                DialogInterface dialog, int id) {
+                                            Intent intent = new Intent(
+                                                    getActivity(), app.getMainActivity());
+                                            intent.putExtra(MainActivity.EXTRA_FRAGMENT, "account");
+                                            getActivity().startActivity(intent);
+                                            getActivity().finish();
+                                        }
+                                    });
                     AlertDialog alert = builder.create();
                     alert.show();
                 } else {
@@ -963,7 +1167,7 @@ public class SearchResultDetailFragment extends Fragment
 
             @Override
             public StepTask<?> newTask(MultiStepResultHelper helper, int useraction,
-                    String selection, DetailledItem item) {
+                                       String selection, DetailedItem item) {
                 return new ResTask(helper, useraction, selection, item);
             }
         });
@@ -972,16 +1176,13 @@ public class SearchResultDetailFragment extends Fragment
 
     protected void bookingStart() {
         AccountDataSource data = new AccountDataSource(getActivity());
-        data.open();
-        final List<Account> accounts = data.getAccountsWithPassword(app
-                .getLibrary().getIdent());
-        data.close();
+        final List<Account> accounts = data.getAccountsWithPassword(getLibraryIdent());
         if (accounts.size() == 0) {
             dialog_no_credentials();
         } else if (accounts.size() > 1) {
             AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
             // Get the layout inflater
-            LayoutInflater inflater = getLayoutInflater(null);
+            LayoutInflater inflater = getActivity().getLayoutInflater();
 
             View view = inflater.inflate(R.layout.dialog_simple_list, null, false);
 
@@ -992,22 +1193,24 @@ public class SearchResultDetailFragment extends Fragment
             lv.setOnItemClickListener(new OnItemClickListener() {
                 @Override
                 public void onItemClick(AdapterView<?> parent, View view,
-                        int position, long id) {
-                    app.setAccount(accounts.get(position).getId());
+                                        int position, long id) {
+                    if (getCurrentAccount().getId() != accounts.get(position).getId()) {
+                        app.setAccount(accounts.get(position).getId());
+                    }
                     bookingDo();
                     adialog.dismiss();
                 }
             });
             builder.setTitle(R.string.account_select)
-                   .setView(view)
-                   .setNegativeButton(R.string.cancel,
-                           new DialogInterface.OnClickListener() {
-                               @Override
-                               public void onClick(DialogInterface dialog,
-                                       int id) {
-                                   adialog.cancel();
-                               }
-                           });
+                    .setView(view)
+                    .setNegativeButton(R.string.cancel,
+                            new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface dialog,
+                                                    int id) {
+                                    adialog.cancel();
+                                }
+                            });
             adialog = builder.create();
             adialog.show();
         } else {
@@ -1016,18 +1219,16 @@ public class SearchResultDetailFragment extends Fragment
     }
 
     public void bookingDo() {
-        MultiStepResultHelper<DetailledItem> msrhBooking = new MultiStepResultHelper<>(
+        MultiStepResultHelper<DetailedItem> msrhBooking = new MultiStepResultHelper<>(
                 getActivity(), item, R.string.doing_booking);
-        msrhBooking.setCallback(new Callback<DetailledItem>() {
+        msrhBooking.setCallback(new Callback<DetailedItem>() {
             @Override
             public void onSuccess(MultiStepResult result) {
                 if (getActivity() == null) {
                     return;
                 }
                 AccountDataSource adata = new AccountDataSource(getActivity());
-                adata.open();
-                adata.invalidateCachedAccountData(app.getAccount());
-                adata.close();
+                adata.invalidateCachedAccountData(getCurrentAccount());
                 Intent intent = new Intent(getActivity(), app.getMainActivity());
                 intent.putExtra(MainActivity.EXTRA_FRAGMENT, "account");
                 getActivity().startActivity(intent);
@@ -1052,11 +1253,64 @@ public class SearchResultDetailFragment extends Fragment
 
             @Override
             public StepTask<?> newTask(MultiStepResultHelper helper, int useraction,
-                    String selection, DetailledItem item) {
+                                       String selection, DetailedItem item) {
                 return new BookingTask(helper, useraction, selection, item);
             }
         });
         msrhBooking.start();
+    }
+
+    private OpacApi getCurrentApi() throws OpacClient.LibraryRemovedException {
+        if(!isMetaSearch()) {
+            // if we come from the normal 1-library search
+            // we use the Api from app.getApi() (because there we started the search)
+            return app.getApi();
+        } else {
+            // if we come from the MetaSearch
+            // we use the Api from api repository. These apis can be obtained from app.getMetaSearchApi()
+            OpacApi api = app.getApiFromMetaSearch(libraryIdent);
+            return api;
+        }
+    }
+
+    private Account getCurrentAccount() {
+        if(!isMetaSearch()) {
+            // if we come from the normal 1-library search
+            // we use the Account from app.getAccount() (because there we started the search)
+            return app.getAccount();
+        } else {
+            if(currentAccout == null) {
+                obtainCurrentAccount();
+            }
+
+            return currentAccout;
+        }
+    }
+
+    private void obtainCurrentAccount() {
+        // if we come from the MetaSearch
+        // we check if there exists an account for the given libraryIdent
+        currentAccout = app.getAccountByLibrary(getLibraryIdent());
+
+        if(currentAccout == null) {
+            // if not we create one (without password)
+            app.createAccountForLibrary(getActivity(), getLibraryIdent());
+
+            // notify user
+            showToastCreatedAccount();
+
+            // and use it in this fragment
+            currentAccout = app.getAccountByLibrary(getLibraryIdent());
+        }
+    }
+
+    private void showToastCreatedAccount() {
+        getActivity().runOnUiThread(() -> Toast.makeText(getContext(), getString(R.string.search_detail_created_account), Toast.LENGTH_LONG).show());
+    }
+
+    private boolean isMetaSearch() {
+        boolean isMetaSearch = getActivity().getIntent().getBooleanExtra(ARG_IS_META_SEARCH, false);
+        return isMetaSearch;
     }
 
     /**
@@ -1083,37 +1337,38 @@ public class SearchResultDetailFragment extends Fragment
         }
     }
 
-    public class FetchTask extends AsyncTask<Void, Void, DetailledItem> {
+    public class FetchTask extends AsyncTask<Void, Void, DetailedItem> {
         protected boolean success = true;
         protected Integer nr;
         protected String id;
+        protected OpacApi apiToUse;
 
-        public FetchTask(Integer nr, String id) {
+        public FetchTask(OpacApi apiToUse, Integer nr, String id) {
+            this.apiToUse = apiToUse;
             this.nr = nr;
             this.id = id;
         }
 
         @Override
-        protected DetailledItem doInBackground(Void... voids) {
+        protected DetailedItem doInBackground(Void... voids) {
             try {
-                DetailledItem res;
+                DetailedItem res;
                 if (id != null && !id.equals("")) {
                     SharedPreferences sp = PreferenceManager
                             .getDefaultSharedPreferences(getActivity());
                     String homebranch = sp.getString(
                             OpacClient.PREF_HOME_BRANCH_PREFIX
-                                    + app.getAccount().getId(), null);
-
+                                    + getCurrentAccount().getId(), null);
                     if (getActivity().getIntent().hasExtra("reservation")
                             && getActivity().getIntent().getBooleanExtra(
                             "reservation", false)) {
-                        app.getApi().start();
+                        apiToUse.start();
                     }
 
-                    res = app.getApi().getResultById(id, homebranch);
+                    res = apiToUse.getResultById(id, homebranch);
                     if (res.getId() == null) res.setId(id);
                 } else {
-                    res = app.getApi().getResult(nr);
+                    res = apiToUse.getResult(nr);
                 }
                 if (res.getMediaType() == null && getArguments().containsKey(ARG_ITEM_MEDIATYPE)) {
                     res.setMediaType(SearchResult.MediaType
@@ -1130,7 +1385,7 @@ public class SearchResultDetailFragment extends Fragment
 
         @Override
         @SuppressLint("NewApi")
-        protected void onPostExecute(DetailledItem result) {
+        protected void onPostExecute(DetailedItem result) {
             if (getActivity() == null) {
                 return;
             }
@@ -1142,8 +1397,17 @@ public class SearchResultDetailFragment extends Fragment
 
             item = result;
 
+            PreferenceDataSource pds = new PreferenceDataSource(getContext());
+            ConnectivityManager connMgr =
+                    (ConnectivityManager) getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+
             if (item.getCover() != null && item.getCoverBitmap() == null) {
-                new LoadCoverTask(item, collapsingToolbar.getWidth(), collapsingToolbar.getHeight()).execute();
+                if ((pds.isLoadCoversOnDataPreferenceSet()
+                        || !ConnectivityManagerCompat.isActiveNetworkMetered(connMgr))) {
+                    new LoadCoverTask(item, collapsingToolbar.getWidth(),
+                            collapsingToolbar.getHeight()).execute();
+                }
+
             } else {
                 displayCover();
             }
@@ -1173,10 +1437,10 @@ public class SearchResultDetailFragment extends Fragment
     }
 
     public class ResTask extends StepTask<ReservationResult> {
-        private DetailledItem item;
+        private DetailedItem item;
 
         public ResTask(MultiStepResultHelper helper, int useraction, String selection,
-                DetailledItem item) {
+                       DetailedItem item) {
             super(helper, useraction, selection);
             this.item = item;
         }
@@ -1184,8 +1448,8 @@ public class SearchResultDetailFragment extends Fragment
         @Override
         protected ReservationResult doInBackground(Void... voids) {
             try {
-                return app.getApi().reservation(item,
-                        app.getAccount(), useraction, selection);
+                return getCurrentApi().reservation(item,
+                        getCurrentAccount(), useraction, selection);
             } catch (IOException e) {
                 publishProgress(e, "ioerror");
             } catch (Exception e) {
@@ -1204,15 +1468,15 @@ public class SearchResultDetailFragment extends Fragment
                 AlertDialog.Builder builder = new AlertDialog.Builder(
                         getActivity());
                 builder.setMessage(R.string.error)
-                       .setCancelable(true)
-                       .setNegativeButton(R.string.close,
-                               new DialogInterface.OnClickListener() {
-                                   @Override
-                                   public void onClick(DialogInterface dialog,
-                                           int id) {
-                                       dialog.cancel();
-                                   }
-                               });
+                        .setCancelable(true)
+                        .setNegativeButton(R.string.close,
+                                new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog,
+                                                        int id) {
+                                        dialog.cancel();
+                                    }
+                                });
                 AlertDialog alert = builder.create();
                 alert.show();
                 return;
@@ -1224,10 +1488,10 @@ public class SearchResultDetailFragment extends Fragment
 
     public class BookingTask extends StepTask<BookingResult> {
 
-        private DetailledItem item;
+        private DetailedItem item;
 
         public BookingTask(MultiStepResultHelper helper, int useraction, String selection,
-                DetailledItem item) {
+                           DetailedItem item) {
             super(helper, useraction, selection);
             this.item = item;
         }
@@ -1235,9 +1499,9 @@ public class SearchResultDetailFragment extends Fragment
         @Override
         protected BookingResult doInBackground(Void... voids) {
             try {
-                return ((EbookServiceApi) app.getApi()).booking(
-                        item, app.getAccount(), useraction, selection);
-            } catch (IOException e) {
+                return ((EbookServiceApi) getCurrentApi()).booking(
+                        item, getCurrentAccount(), useraction, selection);
+            } catch (IOException | OpacClient.LibraryRemovedException e) {
                 publishProgress(e, "ioerror");
             } catch (Exception e) {
                 ErrorReporter.handleException(e);
@@ -1255,15 +1519,15 @@ public class SearchResultDetailFragment extends Fragment
                 AlertDialog.Builder builder = new AlertDialog.Builder(
                         getActivity());
                 builder.setMessage(R.string.error)
-                       .setCancelable(true)
-                       .setNegativeButton(R.string.close,
-                               new DialogInterface.OnClickListener() {
-                                   @Override
-                                   public void onClick(DialogInterface dialog,
-                                           int id) {
-                                       dialog.cancel();
-                                   }
-                               });
+                        .setCancelable(true)
+                        .setNegativeButton(R.string.close,
+                                new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog,
+                                                        int id) {
+                                        dialog.cancel();
+                                    }
+                                });
                 AlertDialog alert = builder.create();
                 alert.show();
                 return;
@@ -1288,8 +1552,8 @@ public class SearchResultDetailFragment extends Fragment
                             .getDefaultSharedPreferences(getActivity());
                     String homebranch = sp.getString(
                             OpacClient.PREF_HOME_BRANCH_PREFIX
-                                    + app.getAccount().getId(), null);
-                    app.getApi().getResultById(id, homebranch);
+                                    + getCurrentAccount().getId(), null);
+                    getCurrentApi().getResultById(id, homebranch);
                     return 0;
                 } else {
                     ErrorReporter.handleException(

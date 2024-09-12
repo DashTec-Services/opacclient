@@ -19,21 +19,29 @@
 package de.geeksfactory.opacclient;
 
 import de.geeksfactory.opacclient.apis.Adis;
+import de.geeksfactory.opacclient.apis.Arena;
+import de.geeksfactory.opacclient.apis.BIB2;
 import de.geeksfactory.opacclient.apis.BiBer1992;
 import de.geeksfactory.opacclient.apis.Bibliotheca;
 import de.geeksfactory.opacclient.apis.Heidi;
 import de.geeksfactory.opacclient.apis.IOpac;
+import de.geeksfactory.opacclient.apis.Koha;
+import de.geeksfactory.opacclient.apis.Lissy;
+import de.geeksfactory.opacclient.apis.Littera;
+import de.geeksfactory.opacclient.apis.NetBiblio;
 import de.geeksfactory.opacclient.apis.OpacApi;
-import de.geeksfactory.opacclient.apis.Open;
+import de.geeksfactory.opacclient.apis.OpenAccountScraper;
+import de.geeksfactory.opacclient.apis.OpenSearch;
 import de.geeksfactory.opacclient.apis.PicaLBS;
 import de.geeksfactory.opacclient.apis.PicaOld;
 import de.geeksfactory.opacclient.apis.Primo;
 import de.geeksfactory.opacclient.apis.SISIS;
+import de.geeksfactory.opacclient.apis.SLIM;
+import de.geeksfactory.opacclient.apis.SLUB;
 import de.geeksfactory.opacclient.apis.SRU;
 import de.geeksfactory.opacclient.apis.TestApi;
 import de.geeksfactory.opacclient.apis.TouchPoint;
 import de.geeksfactory.opacclient.apis.VuFind;
-import de.geeksfactory.opacclient.apis.WebOpacAt;
 import de.geeksfactory.opacclient.apis.WebOpacNet;
 import de.geeksfactory.opacclient.apis.WinBiap;
 import de.geeksfactory.opacclient.apis.Zones;
@@ -41,6 +49,7 @@ import de.geeksfactory.opacclient.i18n.DummyStringProvider;
 import de.geeksfactory.opacclient.i18n.StringProvider;
 import de.geeksfactory.opacclient.networking.HttpClientFactory;
 import de.geeksfactory.opacclient.objects.Library;
+import de.geeksfactory.opacclient.reporting.ReportHandler;
 
 /**
  * This class is used to simplify obtaining {@link OpacApi} instances.
@@ -64,7 +73,22 @@ public class OpacApiFactory {
      * @return a new {@link OpacApi} instance
      */
     public static OpacApi create(Library lib, String userAgent) {
-        return create(lib, new DummyStringProvider(), new HttpClientFactory(userAgent), null);
+        return create(lib, new DummyStringProvider(), new HttpClientFactory(userAgent), null, null);
+    }
+
+    public static OpacApi create(Library lib, StringProvider sp, HttpClientFactory hcf,
+            String lang) {
+        return create(lib, sp, hcf, lang, null);
+    }
+
+    public static OpacApi create(Library lib, StringProvider sp, HttpClientFactory hcf,
+            String lang, ReportHandler reportHandler) {
+        return create(lib, sp, hcf, lang, reportHandler, false);
+    }
+
+    public static OpacApi create(Library lib, StringProvider sp, HttpClientFactory hcf,
+            String lang, ReportHandler reportHandler, boolean debug) {
+        return create(lib, sp, hcf, lang, reportHandler, debug, CoverDownloadStrategy.SYNCHRONOUS);
     }
 
     /**
@@ -73,11 +97,15 @@ public class OpacApiFactory {
      * @param lib  the {@link Library} you want to connect to
      * @param sp   the {@link StringProvider} to use
      * @param hcf  the {@link HttpClientFactory} to use
-     * @param lang the preferred language as a ISO-639-1 code, see {@link OpacApi#setLanguage(String)}
+     * @param lang the preferred language as a ISO-639-1 code, see
+     * {@link OpacApi#setLanguage(String)}
+     * @param debug turn on debug mode (if supported by library system)
+     * @param coverDownloadStrategy how to download covers (if supported by library system)
      * @return a new {@link OpacApi} instance
      */
     public static OpacApi create(Library lib, StringProvider sp, HttpClientFactory hcf,
-            String lang) {
+            String lang, ReportHandler reportHandler, boolean debug,
+            CoverDownloadStrategy coverDownloadStrategy) {
         OpacApi newApiInstance;
         if (lib.getApi().equals("bibliotheca")) {
             newApiInstance = new Bibliotheca();
@@ -111,8 +139,8 @@ public class OpacApiFactory {
             newApiInstance = new VuFind();
         } else if (lib.getApi().equals("webopac.net")) {
             newApiInstance = new WebOpacNet();
-        } else if (lib.getApi().equals("web-opac.at")) {
-            newApiInstance = new WebOpacAt();
+        } else if (lib.getApi().equals("web-opac.at") || lib.getApi().equals("littera")) {
+            newApiInstance = new Littera();
         } else if (lib.getApi().equals("winbiap")) {
             newApiInstance = new WinBiap();
         } else if (lib.getApi().equals("heidi")) {
@@ -120,14 +148,33 @@ public class OpacApiFactory {
         } else if (lib.getApi().equals("touchpoint")) {
             newApiInstance = new TouchPoint();
         } else if (lib.getApi().equals("open")) {
-            newApiInstance = new Open();
+            if (lib.isAccountSupported() && lib.isSupportContract()) {
+                newApiInstance = new OpenAccountScraper(coverDownloadStrategy);
+            } else {
+                newApiInstance = new OpenSearch(coverDownloadStrategy);
+            }
+        } else if (lib.getApi().equals("koha")) {
+            newApiInstance = new Koha();
+        } else if (lib.getApi().equals("lissy")) {
+            newApiInstance = new Lissy();
+        } else if (lib.getApi().equals("netbiblio")) {
+            newApiInstance = new NetBiblio();
+        } else if (lib.getApi().equals("slub")) {
+            newApiInstance = new SLUB();
+        } else if (lib.getApi().equals("arena")) {
+            newApiInstance = new Arena();
+        } else if (lib.getApi().equals("slim")) {
+            newApiInstance = new SLIM();
+        } else if (lib.getApi().equals("bib2")) {
+            newApiInstance = new BIB2();
         } else if (lib.getApi().equals("test")) {
             newApiInstance = new TestApi();
         } else {
             return null;
         }
-        newApiInstance.init(lib, hcf);
+        newApiInstance.init(lib, hcf, debug);
         newApiInstance.setStringProvider(sp);
+        newApiInstance.setReportHandler(reportHandler);
         if (lang != null) newApiInstance.setLanguage(lang);
         return newApiInstance;
     }

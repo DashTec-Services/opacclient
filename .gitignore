@@ -17,6 +17,7 @@ build/
 # Local configuration file (sdk path, etc)
 local.properties
 ant.properties
+sentry.properties
 
 web/
 testproject/
@@ -34,11 +35,16 @@ assets/buildnum.txt
 Thumbs.db
 
 .gradle
-local.properties
 /opacclient/.idea/*
+/opacclient/**/build/
+/opacclient/opacapp/foss/debug
+/opacclient/opacapp/foss/release
+/opacclient/opacapp/googlePlayServices/debug
+/opacclient/opacapp/googlePlayServices/release
+
+/.idea/*
 *.iml
 .DS_Store
-build/
 .ropeproject/
 
 upload.sh
@@ -51,3 +57,8 @@ opacclient/libs/
 *.bak
 opacclient/tmp/
 
+opacclient/opacapp/src/main/assets/bibs/*.json
+opacclient/opacapp/src/main/assets/last_library_config_update.txt
+opacclient/opacapp/src/main/resources/sentry.properties
+
+tools/googlemaps_api_key.txt

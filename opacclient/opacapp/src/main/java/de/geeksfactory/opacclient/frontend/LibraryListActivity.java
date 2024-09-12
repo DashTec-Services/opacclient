@@ -13,15 +13,7 @@ import android.location.LocationManager;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
-import android.support.annotation.NonNull;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.app.ActivityOptionsCompat;
-import android.support.v4.app.FragmentTransaction;
-import android.support.v4.app.ListFragment;
-import android.support.v4.view.MenuItemCompat;
-import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.SearchView;
-import android.support.v7.widget.Toolbar;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -35,11 +27,15 @@ import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
-import android.widget.RelativeLayout;
 import android.widget.SectionIndexer;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.joda.time.DateTime;
+import org.joda.time.Duration;
+import org.json.JSONException;
+
+import java.io.File;
 import java.io.IOException;
 import java.text.Collator;
 import java.util.ArrayList;
@@ -51,13 +47,28 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.SearchView;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.app.ActivityCompat;
+import androidx.core.view.MenuItemCompat;
+import androidx.fragment.app.FragmentTransaction;
+import androidx.fragment.app.ListFragment;
+import de.geeksfactory.opacclient.BuildConfig;
 import de.geeksfactory.opacclient.OpacClient;
 import de.geeksfactory.opacclient.R;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.Library;
 import de.geeksfactory.opacclient.storage.AccountDataSource;
+import de.geeksfactory.opacclient.storage.JsonSearchFieldDataSource;
+import de.geeksfactory.opacclient.storage.PreferenceDataSource;
 import de.geeksfactory.opacclient.ui.AppCompatProgressDialog;
 import de.geeksfactory.opacclient.utils.ErrorReporter;
+import de.geeksfactory.opacclient.webservice.LibraryConfigUpdateService;
+import de.geeksfactory.opacclient.webservice.WebService;
+import de.geeksfactory.opacclient.webservice.WebServiceManager;
+import io.sentry.core.Sentry;
 
 public class LibraryListActivity extends AppCompatActivity
         implements ActivityCompat.OnRequestPermissionsResultCallback {
@@ -67,6 +78,7 @@ public class LibraryListActivity extends AppCompatActivity
     public static final int LEVEL_CITY = 2;
     public static final int LEVEL_LIBRARY = 3;
     private static final int REQUEST_LOCATION_PERMISSION = 0;
+    public static final String EXTRA_WELCOME = "welcome";
 
     protected List<Library> libraries;
     protected LibraryListFragment fragment;
@@ -74,6 +86,7 @@ public class LibraryListActivity extends AppCompatActivity
     protected LibraryListFragment fragment3;
     protected LibraryListFragment fragment4;
     protected boolean visible;
+    protected boolean list_rendered = false;
 
     protected AppCompatProgressDialog dialog;
 
@@ -82,6 +95,7 @@ public class LibraryListActivity extends AppCompatActivity
 
     protected TextView tvLocateString;
     protected ImageView ivLocationIcon;
+    protected LoadLibrariesTask loadLibrariesTask;
 
     @Override
     protected void onPause() {
@@ -92,6 +106,11 @@ public class LibraryListActivity extends AppCompatActivity
     @Override
     protected void onResume() {
         visible = true;
+        if (loadLibrariesTask.getStatus() == AsyncTask.Status.PENDING) {
+            loadLibrariesTask.execute((OpacClient) getApplication());
+        } else if (!list_rendered && libraries != null) {
+            showListCountries(false);
+        }
         super.onResume();
     }
 
@@ -101,17 +120,19 @@ public class LibraryListActivity extends AppCompatActivity
         setContentView(R.layout.activity_library_list);
         setSupportActionBar((Toolbar) findViewById(R.id.toolbar));
 
-        if (!getIntent().hasExtra("welcome")) {
+        if (getIntent().hasExtra(EXTRA_WELCOME) && savedInstanceState == null) {
+            getSupportActionBar().setHomeButtonEnabled(false);
+            startActivity(new Intent(this, WelcomeActivity.class));
+        } else {
             getSupportActionBar().setHomeButtonEnabled(true);
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
-        } else {
-            getSupportActionBar().setHomeButtonEnabled(false);
         }
 
-        new LoadLibrariesTask().execute((OpacClient) getApplication());
         final LinearLayout llLocate = (LinearLayout) findViewById(R.id.llLocate);
         tvLocateString = (TextView) findViewById(R.id.tvLocateString);
         ivLocationIcon = (ImageView) findViewById(R.id.ivLocationIcon);
+
+        loadLibrariesTask = new LoadLibrariesTask();
 
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
                 PackageManager.PERMISSION_GRANTED) {
@@ -131,7 +152,7 @@ public class LibraryListActivity extends AppCompatActivity
             @Override
             public void onClick(View v) {
                 if (fragment instanceof LocatedLibraryListFragment) {
-                    MenuItemCompat.collapseActionView(searchItem);
+                    searchItem.collapseActionView();
                     showListCountries(true);
                     tvLocateString.setText(R.string.geolocate);
                     ivLocationIcon.setImageResource(R.drawable.ic_locate_24dp);
@@ -142,32 +163,15 @@ public class LibraryListActivity extends AppCompatActivity
                 }
             }
         });
-
-        final RelativeLayout rlSuggestLibrary =
-                (RelativeLayout) findViewById(R.id.rlSuggestLibrary);
-        rlSuggestLibrary.setOnClickListener(new OnClickListener() {
-
-            @Override
-            public void onClick(View v) {
-                Intent intent = new Intent(LibraryListActivity.this,
-                        SuggestLibraryActivity.class);
-                if (getIntent().hasExtra("welcome")) {
-                    intent.putExtra("welcome", true);
-                }
-                ActivityOptionsCompat options = ActivityOptionsCompat.makeScaleUpAnimation
-                        (rlSuggestLibrary, rlSuggestLibrary.getLeft(), rlSuggestLibrary.getTop(),
-                                rlSuggestLibrary.getWidth(), rlSuggestLibrary.getHeight());
-                ActivityCompat.startActivity(LibraryListActivity.this, intent, options.toBundle());
-            }
-
-        });
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
         if (Intent.ACTION_SEARCH.equals(intent.getAction())) {
-            String query = intent.getStringExtra(SearchManager.QUERY);
+            String query = intent.getStringExtra(SearchManager.QUERY).trim();
             search(query);
+        } else {
+            super.onNewIntent(intent);
         }
     }
 
@@ -180,7 +184,7 @@ public class LibraryListActivity extends AppCompatActivity
         // Get the SearchView and set the searchable configuration
         SearchManager searchManager = (SearchManager) getSystemService(Context.SEARCH_SERVICE);
         searchItem = menu.findItem(R.id.action_search);
-        searchView = (SearchView) MenuItemCompat.getActionView(searchItem);
+        searchView = (SearchView) searchItem.getActionView();
         // Assumes current activity is the searchable activity
         searchView.setSearchableInfo(searchManager
                 .getSearchableInfo(getComponentName()));
@@ -269,7 +273,9 @@ public class LibraryListActivity extends AppCompatActivity
                             }
                             Collections.sort(distancedlibs,
                                     new DistanceComparator());
-                            distancedlibs = distancedlibs.subList(0, 20);
+                            if (distancedlibs.size() > 20) {
+                                distancedlibs = distancedlibs.subList(0, 20);
+                            }
 
                             LibraryAdapter adapter = new LibraryAdapter(
                                     LibraryListActivity.this,
@@ -364,6 +370,7 @@ public class LibraryListActivity extends AppCompatActivity
                                            .replace(R.id.container, fragment).commit();
             }
         }
+        list_rendered = true;
     }
 
     public void showListStates(String country) {
@@ -616,13 +623,11 @@ public class LibraryListActivity extends AppCompatActivity
                 case LEVEL_LIBRARY:
                     Library lib = (Library) getListAdapter().getItem(position);
                     AccountDataSource data = new AccountDataSource(getActivity());
-                    data.open();
                     Account acc = new Account();
                     acc.setLibrary(lib.getIdent());
                     acc.setLabel(getActivity().getString(
                             R.string.default_account_name));
                     long insertedid = data.addAccount(acc);
-                    data.close();
 
                     ((OpacClient) getActivity().getApplication())
                             .setAccount(insertedid);
@@ -762,27 +767,59 @@ public class LibraryListActivity extends AppCompatActivity
 
     protected class LoadLibrariesTask extends
             AsyncTask<OpacClient, Double, List<Library>> {
-        private long startTime;
-        private int progressUpdateCount = 0;
+        private boolean first = true;
+
+        @Override
+        protected void onPreExecute() {
+            dialog = new AppCompatProgressDialog(LibraryListActivity.this);
+            dialog.setIndeterminate(false);
+            dialog.setCancelable(false);
+            dialog.setMessage(getString(R.string.updating_libraries));
+            dialog.setProgressStyle(AppCompatProgressDialog.STYLE_HORIZONTAL);
+            dialog.setMax(100);
+            dialog.setProgress(0);
+            dialog.setProgressNumberFormat(null);
+            dialog.show();
+        }
 
         @Override
         protected void onProgressUpdate(Double... progress) {
-            if (progressUpdateCount == 0) {
-                startTime = System.currentTimeMillis();
-            } else if (progressUpdateCount == 1) {
-                double timeElapsed = System.currentTimeMillis() - startTime;
-                double expectedTime = timeElapsed / progress[0];
-                if (expectedTime > 300 && !LibraryListActivity.this.isFinishing()) {
-                    dialog = AppCompatProgressDialog.show(LibraryListActivity.this, "",
-                            getString(R.string.loading_libraries), true, false);
-                    dialog.show();
-                }
+            dialog.setProgress((int) (progress[0] * 100));
+            if (first) {
+                dialog.setMessage(getString(R.string.loading_libraries));
+            } else {
+                first = false;
             }
-            progressUpdateCount++;
         }
 
         @Override
         protected List<Library> doInBackground(OpacClient... arg0) {
+            WebService service = WebServiceManager.getInstance();
+            PreferenceDataSource prefs = new PreferenceDataSource(LibraryListActivity.this);
+
+            if (prefs.getLastLibraryConfigUpdate() == null
+                    || prefs.getLastLibraryConfigUpdate()
+                            .isBefore(new DateTime().minus(new Duration(300 * 1000)))) {
+                File filesDir = new File(getFilesDir(), LibraryConfigUpdateService.LIBRARIES_DIR);
+                filesDir.mkdirs();
+                try {
+                    int count = ((OpacClient) getApplication()).getUpdateHandler().updateConfig(
+                            service, prefs,
+                            new LibraryConfigUpdateService.FileOutput(filesDir),
+                            new JsonSearchFieldDataSource(LibraryListActivity.this));
+                    Log.d("LibraryListActivity",
+                            "updated config for " + String.valueOf(count) + " libraries");
+                    ((OpacClient) getApplication()).resetCache();
+                    if (!BuildConfig.DEBUG) {
+                        Sentry.setExtra(OpacClient.SENTRY_DATA_VERSION,
+                                prefs.getLastLibraryConfigUpdate().toString());
+                    }
+                } catch (IOException | JSONException ignore) {
+                    ignore.printStackTrace();
+                    // fail silently (e.g. when no Internet connection available)
+                }
+            }
+
             OpacClient app = arg0[0];
             try {
                 return app.getLibraries(new OpacClient.ProgressCallback() {

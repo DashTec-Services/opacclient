@@ -19,15 +19,18 @@
 
 package de.geeksfactory.opacclient.networking;
 
+import android.os.Build;
+
 import java.io.IOException;
-import java.io.InputStream;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.CertificateException;
 
 import de.geeksfactory.opacclient.OpacClient;
-import de.geeksfactory.opacclient.R;
+import de.geeksfactory.opacclient.utils.DebugTools;
+import okhttp3.Cache;
+import okhttp3.OkHttpClient;
 
 public class AndroidHttpClientFactory extends HttpClientFactory {
 
@@ -36,23 +39,42 @@ public class AndroidHttpClientFactory extends HttpClientFactory {
     }
 
     @Override
-    protected KeyStore getKeyStore()
+    public KeyStore getKeyStore()
             throws KeyStoreException, IOException, CertificateException, NoSuchAlgorithmException {
-        KeyStore trustStore = KeyStore.getInstance("BKS");
-        final InputStream in = OpacClient.context.getResources().openRawResource(
-                R.raw.ssl_trust_store);
-        try {
-            trustStore.load(in, "ro5eivoijeeGohsh0daequoo5Zeepaen".toCharArray());
-        } finally {
-            in.close();
-        }
-        return trustStore;
+        return super.getKeyStore();
     }
 
-    protected Class<?> getSocketFactoryClass(boolean tls_only) {
-        if (tls_only)
-            return TlsSniSocketFactory.class;
-        else
+    @Override
+    protected Class<?> getSocketFactoryClass(boolean tls_only, boolean allCipherSuites) {
+        if (tls_only) {
+            if (allCipherSuites) {
+                return TlsSniSocketFactoryWithAllCipherSuites.class;
+            } else {
+                return TlsSniSocketFactory.class;
+            }
+        } else {
             return TlsSniSocketFactoryWithSSL3.class;
+        }
+    }
+
+    @Override
+    public OkHttpClient getNewOkHttpClient(boolean customssl, boolean tls_only,
+                                           boolean allCipherSuites) {
+        OkHttpClient.Builder client =
+                super.getOkHttpClientBuilder(customssl, tls_only, allCipherSuites,
+                        Build.VERSION.SDK_INT == 24);
+        int cacheSize = 50 * 1024 * 1024; // 50MB
+        client.cache(new Cache(OpacClient.context.getCacheDir(), cacheSize));
+        return DebugTools.prepareHttpClient(client).build();
+    }
+
+    public OkHttpClient getNewOkHttpClient(boolean customssl, boolean tls_only,
+            boolean allCipherSuites, int timeout) {
+        OkHttpClient.Builder client =
+                super.getOkHttpClientBuilder(customssl, tls_only, allCipherSuites,
+                        Build.VERSION.SDK_INT == 24, timeout);
+        int cacheSize = 50 * 1024 * 1024; // 50MB
+        client.cache(new Cache(OpacClient.context.getCacheDir(), cacheSize));
+        return DebugTools.prepareHttpClient(client).build();
     }
 }

@@ -8,8 +8,7 @@ import android.content.SharedPreferences;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.AsyncTask;
-import android.preference.PreferenceManager;
-import android.support.v7.app.AlertDialog;
+import androidx.preference.PreferenceManager;
 import android.text.Html;
 import android.text.TextUtils.TruncateAt;
 import android.view.LayoutInflater;
@@ -27,6 +26,7 @@ import android.widget.TextView;
 import java.util.List;
 import java.util.Map;
 
+import androidx.appcompat.app.AlertDialog;
 import de.geeksfactory.opacclient.R;
 import de.geeksfactory.opacclient.apis.OpacApi.MultiStepResult;
 import de.geeksfactory.opacclient.apis.OpacApi.ReservationResult;
@@ -134,14 +134,16 @@ public class MultiStepResultHelper<Arg> {
                 if (detail.length == 2) {
                     TextView tv1 = new TextView(context);
                     tv1.setText(Html.fromHtml(detail[0]));
+                    tv1.setEllipsize(TruncateAt.END);
+                    tv1.setSingleLine(false);
                     tv1.setTypeface(null, Typeface.BOLD);
                     tv1.setPadding(0, 0, 8, 0);
                     TextView tv2 = new TextView(context);
                     tv2.setText(Html.fromHtml(detail[1]));
                     tv2.setEllipsize(TruncateAt.END);
                     tv2.setSingleLine(false);
-                    tr.addView(tv1);
-                    tr.addView(tv2);
+                    tr.addView(tv1, new TableRow.LayoutParams(0, TableRow.LayoutParams.WRAP_CONTENT, 1f));
+                    tr.addView(tv2,  new TableRow.LayoutParams(0, TableRow.LayoutParams.WRAP_CONTENT, 1f));
                 } else if (detail.length == 1) {
                     TextView tv1 = new TextView(context);
                     tv1.setText(Html.fromHtml(detail[0]));

@@ -4,7 +4,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent">
 
-    <android.support.v7.widget.Toolbar
+    <androidx.appcompat.widget.Toolbar
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
         android:layout_height="168dp"
@@ -21,7 +21,7 @@
         android:background="@drawable/toolbar_shadow"/>
 
     <FrameLayout
-        android:layout_width="720dp"
+        android:layout_width="560dp"
         android:layout_height="match_parent"
         android:layout_below="@id/toolbar"
         android:layout_centerHorizontal="true"
@@ -48,7 +48,7 @@
         android:layout_marginTop="-36dp"
         android:contentDescription="@string/account_add"
         android:elevation="4dp"
-        app:srcCompat="@drawable/ic_accounts_add_white_24dp"
+        app:srcCompat="@drawable/ic_accounts_add_toolbar_24dp"
         tools:ignore="MissingPrefix"/>
 
 </RelativeLayout>

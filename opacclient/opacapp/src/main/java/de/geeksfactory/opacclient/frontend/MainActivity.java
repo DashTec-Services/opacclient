@@ -1,31 +1,55 @@
 package de.geeksfactory.opacclient.frontend;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
+import android.app.Activity;
+import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.IntentFilter.MalformedMimeTypeException;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
-import android.preference.PreferenceManager;
-import android.support.v4.app.Fragment;
-import android.support.v4.app.FragmentManager;
-import android.support.v7.app.AlertDialog;
+
+import androidx.annotation.MainThread;
+import androidx.core.app.ActivityCompat;
+import androidx.preference.PreferenceManager;
+
+import android.util.Log;
 import android.view.LayoutInflater;
+import android.view.View;
+import android.widget.TextView;
 import android.widget.Toast;
+
+import org.joda.time.DateTime;
+import org.joda.time.format.PeriodFormat;
+import org.json.JSONException;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
+import androidx.appcompat.app.AlertDialog;
+import androidx.core.content.ContextCompat;
+import androidx.fragment.app.DialogFragment;
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager;
+
+import de.geeksfactory.opacclient.BuildConfig;
 import de.geeksfactory.opacclient.R;
-import de.geeksfactory.opacclient.apis.OpacApi;
 import de.geeksfactory.opacclient.barcode.BarcodeScanIntegrator;
 import de.geeksfactory.opacclient.objects.Account;
 import de.geeksfactory.opacclient.objects.LentItem;
@@ -34,14 +58,19 @@ import de.geeksfactory.opacclient.reminder.ReminderBroadcastReceiver;
 import de.geeksfactory.opacclient.searchfields.SearchField;
 import de.geeksfactory.opacclient.searchfields.SearchQuery;
 import de.geeksfactory.opacclient.storage.AccountDataSource;
+import de.geeksfactory.opacclient.storage.DataIntegrityException;
 import de.geeksfactory.opacclient.storage.JsonSearchFieldDataSource;
+import de.geeksfactory.opacclient.storage.PreferenceDataSource;
 import de.geeksfactory.opacclient.storage.SearchFieldDataSource;
+import de.geeksfactory.opacclient.webservice.LibraryConfigUpdateService;
 
 public class MainActivity extends OpacActivity
         implements SearchFragment.Callback, StarredFragment.Callback,
         SearchResultDetailFragment.Callbacks {
 
     public static final String EXTRA_FRAGMENT = "fragment";
+    public static final String ACTION_SEARCH = "de.geeksfactory.opacclient.SEARCH";
+    public static final String ACTION_ACCOUNT = "de.geeksfactory.opacclient.ACCOUNT";
     private String[][] techListsArray;
     private IntentFilter[] intentFiltersArray;
     private PendingIntent nfcIntent;
@@ -97,23 +126,84 @@ public class MainActivity extends OpacActivity
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        sp = PreferenceManager.getDefaultSharedPreferences(this);
+
+        String itemToSelect = null;
+
         if (getIntent() != null && getIntent().getAction() != null) {
             if (getIntent().getAction().equals("android.intent.action.VIEW")) {
                 urlintent();
-                return;
+            } else if (getIntent().getAction().equals(ACTION_SEARCH)
+                    || getIntent().getAction().equals(ACTION_ACCOUNT)) {
+                String lib = getIntent().getStringExtra("library");
+                AccountDataSource adata = new AccountDataSource(this);
+                List<Account> accounts = adata.getAllAccounts(lib);
+
+                if (accounts.size() == 0) {
+                    // Check if library exists (an IOException should be thrown otherwise, correct?)
+                    try {
+                        app.getLibrary(lib);
+                    } catch (IOException | JSONException e) {
+                        return;
+                    }
+                    Account account = new Account();
+                    account.setLibrary(lib);
+                    account.setLabel(getString(R.string.default_account_name));
+                    account.setName("");
+                    account.setPassword("");
+                    long id = adata.addAccount(account);
+                    selectaccount(id);
+                } else if (accounts.size() == 1) {
+                    selectaccount(accounts.get(0).getId());
+                } else if (accounts.size() > 0) {
+                    if (getIntent().getAction().equals(ACTION_ACCOUNT)) {
+                        List<Account> accountsWithPassword = new ArrayList<>();
+                        for (Account account : accounts) {
+                            if (account.getName() != null && account.getPassword() != null
+                                    && !account.getName().isEmpty()
+                                    && !account.getPassword().isEmpty()) {
+                                accountsWithPassword.add(account);
+                            }
+                        }
+                        if (accountsWithPassword.size() == 1) {
+                            selectaccount(accountsWithPassword.get(0).getId());
+                        } else {
+                            showAccountSelectDialog(accounts);
+                        }
+                    } else {
+                        showAccountSelectDialog(accounts);
+                    }
+                }
+
+                if (getIntent().getAction().equals(ACTION_SEARCH)) {
+                    itemToSelect = "search";
+                } else {
+                    itemToSelect = "account";
+                }
             }
         }
-
-        sp = PreferenceManager.getDefaultSharedPreferences(this);
 
         if (savedInstanceState == null) {
             if (getIntent().hasExtra(EXTRA_FRAGMENT)) {
                 selectItem(getIntent().getStringExtra(EXTRA_FRAGMENT));
             } else if (getIntent().hasExtra(ReminderBroadcastReceiver.EXTRA_ALARM_ID)) {
                 AccountDataSource adata = new AccountDataSource(this);
-                adata.open();
-                Alarm alarm = adata.getAlarm(
-                        getIntent().getLongExtra(ReminderBroadcastReceiver.EXTRA_ALARM_ID, -1));
+                long alid = getIntent().getLongExtra(ReminderBroadcastReceiver.EXTRA_ALARM_ID, -1);
+                Alarm alarm = adata.getAlarm(alid);
+                if (alarm == null) {
+                    throw new DataIntegrityException("Unknown alarm ID " + alid + " received.");
+                }
+
+                SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+                if (prefs.getBoolean("notification_repeat", true)) {
+                    ReminderBroadcastReceiver.snooze(adata, alarm, ReminderBroadcastReceiver.calculateSnoozeDuration(alarm));
+                } else {
+                    ReminderBroadcastReceiver.finished(adata, alarm);
+                }
+
+                NotificationManager notificationManager = (NotificationManager) this.getSystemService(Context.NOTIFICATION_SERVICE);
+                notificationManager.cancel((int) alarm.id);
+
                 List<LentItem> items = adata.getLentItems(alarm.media);
                 if (items.size() > 0) {
                     long firstAccount = items.get(0).getAccount();
@@ -136,7 +226,8 @@ public class MainActivity extends OpacActivity
                         selectItem("account");
                     }
                 }
-                adata.close();
+            } else if (itemToSelect != null) {
+                selectItem(itemToSelect);
             } else if (sp.contains("startup_fragment")) {
                 selectItem(sp.getString("startup_fragment", "search"));
             } else {
@@ -152,7 +243,7 @@ public class MainActivity extends OpacActivity
             if (nfc_capable) {
                 mAdapter = android.nfc.NfcAdapter.getDefaultAdapter(this);
                 nfcIntent = PendingIntent.getActivity(this, 0,
-                        new Intent(this, getClass()).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), 0);
+                        new Intent(this, getClass()).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_MUTABLE);
                 IntentFilter ndef = new IntentFilter(android.nfc.NfcAdapter.ACTION_TECH_DISCOVERED);
                 try {
                     ndef.addDataType("*/*");
@@ -170,6 +261,71 @@ public class MainActivity extends OpacActivity
         if (app.getLibrary() != null) {
             getSupportActionBar().setSubtitle(app.getLibrary().getDisplayName());
         }
+
+        showUpdateInfoDialog();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            getWindow().setExitTransition(null);
+        }
+
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(this);
+        Activity activity = this;
+        if (sp.getBoolean("notification_service", false) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ActivityCompat.checkSelfPermission(this,
+                    Manifest.permission.POST_NOTIFICATIONS) !=
+                    PackageManager.PERMISSION_GRANTED) {
+                AlertDialog.Builder builder = new AlertDialog.Builder(this);
+                builder.setMessage(R.string.notification_permission)
+                       .setCancelable(true)
+                       .setNegativeButton(R.string.cancel,
+                               new DialogInterface.OnClickListener() {
+                                   @Override
+                                   public void onClick(DialogInterface d, int id) {
+                                       d.cancel();
+                                   }
+                               })
+                       .setPositiveButton(R.string.confirm,
+                               new DialogInterface.OnClickListener() {
+                                   @Override
+                                   public void onClick(DialogInterface d, int id) {
+                                       d.dismiss();
+                                       ActivityCompat.requestPermissions(
+                                               activity,
+                                               new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                                               12345
+                                       );
+                                   }
+                               });
+                AlertDialog alert = builder.create();
+                alert.show();
+            }
+        }
+
+
+        PreferenceDataSource prefs = new PreferenceDataSource(this);
+        if (System.currentTimeMillis() - prefs.getLastLibraryConfigUpdateTry() > 24 * 3600 * 1000) {
+            // If the library config update did not run for more than 24h, let's trigger it now in
+            // the background, even if the result will only be active on the next app start / account
+            // switch.
+            Intent i = new Intent(this, LibraryConfigUpdateService.class);
+            startService(i);
+        }
+    }
+
+    private void showAccountSelectDialog(final List<Account> accounts) {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.account_select)
+                .setAdapter(
+                        new AccountListAdapter(this, accounts)
+                                .setHighlightActiveAccount(false),
+                        new DialogInterface.OnClickListener() {
+
+                            @Override
+                            public void onClick(DialogInterface dialog,
+                                    int which) {
+                                selectaccount(accounts.get(which).getId());
+                            }
+                        }).create().show();
     }
 
     @Override
@@ -182,6 +338,7 @@ public class MainActivity extends OpacActivity
         }
 
         nfcHint();
+        supportPolicyHint();
 
         //		try {
         //			List<SearchField> fields = app.getApi()
@@ -209,16 +366,14 @@ public class MainActivity extends OpacActivity
                 throw new AssertionError("UTF-8 is unknown");
             }
 
-            if (!app.getLibrary().getIdent().equals(bib)) {
+            if (app.getLibrary() == null || !app.getLibrary().getIdent().equals(bib)) {
                 AccountDataSource adata = new AccountDataSource(this);
-                adata.open();
                 List<Account> accounts = adata.getAllAccounts(bib);
-                adata.close();
                 if (accounts.size() > 0) {
                     app.setAccount(accounts.get(0).getId());
                 } else {
                     Intent i = new Intent(Intent.ACTION_VIEW,
-                            Uri.parse("http://opacapp.de/web" + d.getPath()));
+                            Uri.parse("https://de.opacapp.net/" + d.getPath()));
                     startActivity(i);
                     return;
                 }
@@ -253,6 +408,7 @@ public class MainActivity extends OpacActivity
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent idata) {
         super.onActivityResult(requestCode, resultCode, idata);
+        fragment.onActivityResult(requestCode, resultCode, idata);
 
         //TODO: Rewrite this for the new SearchField implementation
         // Barcode
@@ -289,7 +445,7 @@ public class MainActivity extends OpacActivity
         if (nfc_capable && sp.getBoolean("nfc_search", false)) {
             try {
                 mAdapter.disableForegroundDispatch(this);
-            } catch (SecurityException e) {
+            } catch (IllegalStateException | SecurityException e) {
                 e.printStackTrace();
             }
         }
@@ -315,8 +471,9 @@ public class MainActivity extends OpacActivity
         }
     }
 
+    @TargetApi(10)
     private void nfcHint() {
-        if (nfc_capable && !sp.getBoolean("nfc_search", false) &&
+        if (nfc_capable && !sp.getBoolean("nfc_search", false) && Build.VERSION.SDK_INT >= 10 &&
                 !sp.getBoolean("nfc_hint_shown", false) && app.getLibrary().isNfcSupported()) {
             new AlertDialog.Builder(this)
                     .setView(LayoutInflater.from(this).inflate(R.layout.dialog_nfc_hint, null))
@@ -338,6 +495,42 @@ public class MainActivity extends OpacActivity
                             .show();
                 }
             }).show();
+        }
+    }
+
+
+    private void supportPolicyHint() {
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(MainActivity.this);
+        String pkey_time = "notice_support";
+        if (System.currentTimeMillis() - sp.getLong(pkey_time, 0) > 24 * 60 * 60 * 1000) {
+            findViewById(R.id.support_policy_hint).setVisibility(View.VISIBLE);
+
+            if (app.getLibrary().isSupportContract()) {
+                ((TextView) findViewById(R.id.tvSupportHint)).setText(R.string.support_policy_hint_support);
+            } else {
+                ((TextView) findViewById(R.id.tvSupportHint)).setText(R.string.support_policy_hint);
+            }
+
+            findViewById(R.id.btMoreInfo).setOnClickListener(v -> {
+                Intent websiteIntent = new Intent(Intent.ACTION_VIEW);
+
+                String url;
+                if (app.getLibrary().isSupportContract()) {
+                    url = "https://play.google.com/store/apps/details?id=de.subkom.mobilopac";
+                } else {
+                    url = "https://opac.app/";
+                }
+                websiteIntent.setData(Uri.parse(url));
+                startActivity(websiteIntent);
+            });
+            findViewById(R.id.btGotIt).setOnClickListener(v -> {
+                sp.edit()
+                  .putLong(pkey_time, System.currentTimeMillis())
+                  .apply();
+                findViewById(R.id.support_policy_hint).setVisibility(View.GONE);
+            });
+        } else {
+            findViewById(R.id.support_policy_hint).setVisibility(View.GONE);
         }
     }
 
@@ -367,6 +560,8 @@ public class MainActivity extends OpacActivity
                     startActivity(detailIntent);
                 }
             }
+        } else {
+            super.onNewIntent(intent);
         }
     }
 
@@ -376,6 +571,7 @@ public class MainActivity extends OpacActivity
             rightFragment = new SearchResultDetailFragment();
             Bundle args = new Bundle();
             args.putString(SearchResultDetailFragment.ARG_ITEM_ID, mNr);
+            args.putString(SearchResultDetailFragment.ARG_ITEM_LIBRARY_IDENT, app.getLibrary().getIdent());
             rightFragment.setArguments(args);
 
             // Insert the fragment
@@ -385,6 +581,7 @@ public class MainActivity extends OpacActivity
         } else {
             Intent intent = new Intent(this, SearchResultDetailActivity.class);
             intent.putExtra(SearchResultDetailFragment.ARG_ITEM_ID, mNr);
+            intent.putExtra(SearchResultDetailFragment.ARG_ITEM_LIBRARY_IDENT, app.getLibrary().getIdent());
             startActivity(intent);
         }
     }
@@ -405,6 +602,24 @@ public class MainActivity extends OpacActivity
             } catch (Exception e) {
 
             }
+        }
+    }
+
+    public void showUpdateInfoDialog() {
+        if (!getApplicationContext().getPackageName().startsWith("de.geeksfactory.opacclient")) {
+            return;  // Never show e.g. in plus edition
+        }
+
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(this);
+        Calendar cal = Calendar.getInstance();
+        cal.set(2017, 7, 1, 0, 0, 0);
+        if ((new Date()).after(cal.getTime())) {
+            return;
+        }
+        if (!sp.contains("seen_update_dialog_5.1.1")) {
+            DialogFragment newFragment = new UpdateInfoDialogFragment();
+            newFragment.show(getSupportFragmentManager(), "updateinfo");
+            sp.edit().putBoolean("seen_update_dialog_5.1.1", true).apply();
         }
     }
 
